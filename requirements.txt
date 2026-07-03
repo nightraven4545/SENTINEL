@@ -1,0 +1,33 @@
+# --- Core data ---
+pandas
+numpy
+
+# --- Data ingestion (all free, no paid keys) ---
+yfinance          # market OHLCV
+fredapi           # FRED macro series
+requests          # SEC EDGAR filings (plain HTTP API)
+
+# --- Storage ---
+duckdb            # local analytical warehouse
+
+# --- Models / ML ---
+scikit-learn      # IsolationForest anomaly baseline
+torch             # PyTorch autoencoder
+networkx          # correlation graph
+
+# --- Serving ---
+fastapi
+uvicorn[standard]
+pydantic
+
+# --- Dashboard & charts ---
+streamlit
+plotly
+
+# --- Agent / reports ---
+anthropic         # LLM memo writer (optional; falls back to template if no key)
+reportlab         # memo -> PDF
+
+# --- Config & tests ---
+python-dotenv
+pytest
