@@ -28,6 +28,12 @@ plotly
 anthropic         # LLM memo writer (optional; falls back to template if no key)
 reportlab         # memo -> PDF
 
+# --- Notebooks (headless execution + static chart export for GitHub) ---
+ipykernel
+nbclient
+nbformat
+kaleido
+
 # --- Config & tests ---
 python-dotenv
 pytest
