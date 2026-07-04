@@ -152,4 +152,4 @@ Next.js · Tailwind · framer-motion
 
 ---
 
-Built by **Shreshtha Rawat** — [GitHub](https://github.com/shreshtha-rawat) · [LinkedIn](https://www.linkedin.com/in/shreshtha-rawat) <!-- TODO: real profile links -->
+Built by **Shreshtha Rawat** — [GitHub](https://github.com/nightraven4545) · [LinkedIn](https://www.linkedin.com/in/shreshtha-rawat) <!-- TODO: real LinkedIn -->
