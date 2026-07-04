@@ -19,7 +19,7 @@ load_dotenv()
 # real structure to find: tech (AAPL, MSFT, NVDA), banks (JPM), energy (XOM),
 # pharma (JNJ), staples (PG, WMT), industrials (CAT), utilities (NEE).
 DEFAULT_TICKERS = ["AAPL", "MSFT", "JPM", "XOM", "JNJ", "PG", "NVDA", "CAT", "NEE", "WMT"]
-DEFAULT_START = "2018-01-01"
+DEFAULT_START = os.getenv("SENTINEL_START_DATE", "2018-01-01")
 
 # why 5: forward-fill only bridges short gaps (halts, bad prints). Anything
 # longer probably means a delisting/data problem we should not paper over.

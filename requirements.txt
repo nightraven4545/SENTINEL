@@ -2,10 +2,8 @@
 pandas
 numpy
 
-# --- Data ingestion (all free, no paid keys) ---
-yfinance          # market OHLCV
-fredapi           # FRED macro series
-requests          # SEC EDGAR filings (plain HTTP API)
+# --- Data ingestion (free, no paid keys) ---
+yfinance          # market OHLCV (FRED/EDGAR loaders are future work — see README)
 
 # --- Storage ---
 duckdb            # local analytical warehouse
