@@ -1,0 +1,59 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg: #0b0e14;
+  --color-card: #12161f;
+  --color-line: #1d2430;
+  --color-ink: #e6edf3;
+  --color-muted: #8b949e;
+  --color-mint: #00e5a0;
+}
+
+@theme inline {
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-jbmono), ui-monospace, monospace;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-ink);
+}
+
+::selection {
+  background: rgba(0, 229, 160, 0.25);
+}
+
+/* hero: faint drifting grid */
+.grid-bg {
+  background-image:
+    linear-gradient(rgba(0, 229, 160, 0.055) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 229, 160, 0.055) 1px, transparent 1px);
+  background-size: 44px 44px;
+  animation: gridmove 22s linear infinite;
+}
+@keyframes gridmove {
+  to {
+    background-position: 44px 44px;
+  }
+}
+
+/* hero: scrolling number ticker (content is duplicated; shift by half) */
+.ticker {
+  animation: ticker 45s linear infinite;
+}
+@keyframes ticker {
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .grid-bg,
+  .ticker {
+    animation: none;
+  }
+}
