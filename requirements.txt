@@ -1,3 +1,7 @@
+# CPU-only torch wheels (Linux default is the ~2GB CUDA build — Sentinel's
+# tiny autoencoder needs none of it; keeps Streamlit Cloud/Docker deploys lean)
+--extra-index-url https://download.pytorch.org/whl/cpu
+
 # --- Core data ---
 pandas
 numpy
