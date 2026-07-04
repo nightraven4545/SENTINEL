@@ -58,6 +58,45 @@ def test_warehouse_load_and_derived_returns(tmp_path):
     assert rets["ret"].iloc[1] == pytest.approx(99 / 110 - 1)
 
 
+def test_fetch_prices_falls_back_to_bundled_sample(tmp_path, monkeypatch):
+    import src.ingest.market as market
+
+    sample = make_long([("2024-01-01", "A", 10.0), ("2024-01-01", "B", 20.0)])
+    sample_file = tmp_path / "prices_sample.parquet"
+    sample.to_parquet(sample_file, index=False)
+    monkeypatch.setattr(market, "SAMPLE_FILE", sample_file)
+    monkeypatch.setattr(market, "CACHE_FILE", tmp_path / "no_cache.parquet")
+    monkeypatch.setattr(market.yf, "download",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("rate limited")))
+
+    got = market.fetch_prices(tickers=["A"], use_cache=False)
+    assert list(got["ticker"].unique()) == ["A"]
+
+
+def test_ensure_loaded_bootstraps_and_recovers_half_written_db(tmp_path, monkeypatch):
+    import src.ingest.market as market
+    from src.warehouse.duck import connect, ensure_loaded, query
+
+    long = make_long([("2024-01-01", "A", 100.0), ("2024-01-02", "A", 110.0)])
+    calls = {"n": 0}
+
+    def fake_fetch(*a, **k):
+        calls["n"] += 1
+        return long
+
+    monkeypatch.setattr(market, "fetch_prices", fake_fetch)
+    db = tmp_path / "w.duckdb"
+
+    # simulate the cloud failure mode: schema-only file left behind
+    connect(db).close()
+    ensure_loaded(db)
+    assert query("SELECT count(*) AS n FROM returns", db)["n"].iat[0] == 1
+    assert calls["n"] == 1
+
+    ensure_loaded(db)  # already populated -> no refetch
+    assert calls["n"] == 1
+
+
 def test_warehouse_load_is_idempotent(tmp_path):
     db = tmp_path / "test.duckdb"
     long = make_long([("2024-01-01", "A", 100.0), ("2024-01-02", "A", 101.0)])

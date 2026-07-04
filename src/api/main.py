@@ -33,13 +33,9 @@ from src.models.anomaly import detect_anomalies
 async def lifespan(app: FastAPI):
     """Bootstrap the warehouse on first run so a fresh container serves
     real data after a single `docker run` (fetch needs outbound network)."""
-    from src.warehouse.duck import DB_FILE, connect, load_prices
+    from src.warehouse.duck import ensure_loaded
 
-    if not DB_FILE.exists():
-        from src.ingest.market import fetch_prices
-        con = connect()
-        load_prices(con, fetch_prices())
-        con.close()
+    ensure_loaded()
     yield
 
 

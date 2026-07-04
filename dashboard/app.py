@@ -54,12 +54,8 @@ st.markdown(f"""<style>
 
 @st.cache_data(show_spinner="Loading warehouse (first run fetches market data)…")
 def load_returns() -> pd.DataFrame:
-    from src.warehouse.duck import DB_FILE, connect, load_prices, returns_wide
-    if not DB_FILE.exists():  # fresh deploy (e.g. Streamlit Cloud) bootstraps itself
-        from src.ingest.market import fetch_prices
-        con = connect()
-        load_prices(con, fetch_prices())
-        con.close()
+    from src.warehouse.duck import ensure_loaded, returns_wide
+    ensure_loaded()  # fresh deploy (e.g. Streamlit Cloud) bootstraps itself
     return returns_wide()
 
 

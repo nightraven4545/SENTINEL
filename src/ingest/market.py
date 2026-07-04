@@ -27,6 +27,10 @@ MAX_FFILL_DAYS = 5
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 CACHE_FILE = DATA_DIR / "prices.parquet"
+# A committed snapshot: cloud demo hosts are routinely rate-limited by Yahoo,
+# and a portfolio demo that 500s on Yahoo's mood is worse than one on
+# slightly stale data. Refreshes itself on the next successful fetch.
+SAMPLE_FILE = DATA_DIR / "samples" / "prices_sample.parquet"
 OHLCV_COLS = ["open", "high", "low", "close", "volume"]
 
 
@@ -73,9 +77,15 @@ def fetch_prices(
 
     # auto_adjust=True folds dividends/splits into prices, so close-to-close
     # pct changes are true total-ish returns — what every model downstream wants.
-    raw = yf.download(tickers, start=start, end=end, auto_adjust=True,
-                      group_by="ticker", progress=False)
+    try:
+        raw = yf.download(tickers, start=start, end=end, auto_adjust=True,
+                          group_by="ticker", progress=False)
+    except Exception:
+        raw = pd.DataFrame()
     if raw.empty:
+        if SAMPLE_FILE.exists():  # rate-limited or offline -> bundled snapshot
+            sample = pd.read_parquet(SAMPLE_FILE)
+            return sample[sample["ticker"].isin(tickers)].reset_index(drop=True)
         raise RuntimeError(f"yfinance returned no data for {tickers}")
 
     long = (

@@ -73,6 +73,32 @@ def query(sql: str, db_path: Path | str = DB_FILE) -> pd.DataFrame:
         return con.execute(sql).df()
 
 
+def ensure_loaded(db_path: Path | str = DB_FILE) -> None:
+    """Bootstrap the warehouse if it's missing, empty, or half-written.
+
+    Order matters: fetch the data BEFORE opening the write connection, so a
+    failed fetch (cloud hosts get rate-limited by Yahoo) can never leave
+    behind an empty, write-locked database file — which is exactly the
+    failure mode that bricks a fresh Streamlit Cloud deploy.
+    """
+    db_path = Path(db_path)
+    if db_path.exists():
+        try:
+            if query("SELECT count(*) FROM returns", db_path).iat[0, 0] > 0:
+                return
+        except Exception:
+            pass  # unreadable / schema-only file: rebuild from scratch
+        db_path.unlink()
+
+    from src.ingest.market import fetch_prices
+    prices = fetch_prices()
+    con = connect(db_path)
+    try:
+        load_prices(con, prices)
+    finally:
+        con.close()
+
+
 def returns_wide(db_path: Path | str = DB_FILE) -> pd.DataFrame:
     """Daily returns pivoted wide (date index, one column per ticker) —
     the shape every model in src/models consumes."""
