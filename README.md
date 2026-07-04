@@ -8,7 +8,7 @@
 ![PyTorch](https://img.shields.io/badge/ML-PyTorch%20%2B%20sklearn-00E5A0?logo=pytorch&logoColor=white&labelColor=0B0E14)
 ![Streamlit](https://img.shields.io/badge/dashboard-Streamlit-00E5A0?logo=streamlit&logoColor=white&labelColor=0B0E14)
 
-**[Live dashboard →](https://sentinel-risk.streamlit.app)** · **[Showcase site →](https://sentinel.vercel.app)** <!-- TODO: real URLs after deploy -->
+**[Showcase site →](https://sentinel-eight-xi.vercel.app)** · **[Live dashboard →](https://sentinel-risk.streamlit.app)** <!-- TODO: real Streamlit URL after deploy -->
 
 **Sentinel is an open-source agentic financial risk management engine**: it
 ingests market data, computes portfolio risk metrics (volatility, historical
