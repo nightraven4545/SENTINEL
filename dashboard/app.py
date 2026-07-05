@@ -113,7 +113,7 @@ from src.models import risk  # noqa: E402  (after sys.path fix)
 
 port = risk.portfolio_returns(returns)
 tabs = st.tabs(["Overview", "Deep Dive", "Anomalies", "Network", "Stress Test",
-                "Ask the Agent"])
+                "Fundamentals", "Ask the Agent"])
 
 
 @st.cache_data(show_spinner="Loading benchmark…")
@@ -123,6 +123,19 @@ def load_benchmark() -> pd.Series | None:
         return fetch_benchmark()
     except Exception:
         return None  # CAPM cards degrade gracefully if SPY is unavailable
+
+
+@st.cache_data(show_spinner="Loading SEC filings…")
+def load_fundamentals():
+    """Latest-FY ratios + DuPont from EDGAR. Returns None if both SEC and the
+    bundled snapshot are unavailable, so the tab can degrade gracefully."""
+    try:
+        from src.ingest.edgar import latest_fundamentals
+        from src.models.fundamentals import dupont, ratios
+        w = latest_fundamentals()
+        return ratios(w), dupont(w)
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------- Overview
@@ -362,9 +375,79 @@ with tabs[4]:
         width="stretch")
 
 
-# ---------------------------------------------------------------- Ask the Agent
+# ---------------------------------------------------------------- Fundamentals
 
 with tabs[5]:
+    st.caption("Accounting lens — latest 10-K fundamentals straight from SEC "
+               "EDGAR (XBRL). Prices say how *risky* each name is; the filings "
+               "say how *healthy* it is.")
+    fund = load_fundamentals()
+    if fund is None:
+        st.warning("Fundamentals unavailable — SEC fetch failed and no bundled "
+                   "snapshot was found.")
+    else:
+        rat, dup = fund
+        c = st.columns(4)
+        kpi(c[0], "Companies", f"{len(rat)}", "with 10-K data", "flat")
+        kpi(c[1], "Median ROE", f"{rat['roe'].median():.0%}",
+            "return on equity", "flat")
+        kpi(c[2], "Median net margin", f"{rat['net_margin'].median():.0%}",
+            "profit per $ of sales", "flat")
+        kpi(c[3], "Median D/E", f"{rat['debt_to_equity'].median():.2f}",
+            "leverage", "flat")
+
+        st.write("")
+        left, right = st.columns(2, gap="large")
+
+        # -- DuPont map: the two routes to ROE (margin vs asset velocity)
+        with left:
+            d = dup.dropna(subset=["net_margin", "asset_turnover", "roe"])
+            fig = go.Figure()
+            fig.add_scatter(
+                x=d["asset_turnover"], y=d["net_margin"], mode="markers+text",
+                text=d.index, textposition="top center",
+                textfont=dict(size=10, color=TEXT),
+                marker=dict(size=(d["roe"].clip(lower=0) * 34 + 10),
+                            color=d["roe"], colorscale=[[0, MUTED], [1, MINT]],
+                            showscale=True, colorbar=dict(title="ROE", tickformat=".0%"),
+                            line=dict(width=1, color=BORDER)))
+            fig.update_layout(
+                title="DuPont map — margin vs asset turnover (bubble = ROE)",
+                xaxis_title="asset turnover  (Sales / Assets)",
+                yaxis_title="net margin", yaxis_tickformat=".0%")
+            st.plotly_chart(themed(fig, 380), width="stretch")
+            st.caption("Two routes to the same ROE: fat **margins** (top-left, e.g. "
+                       "Apple/NVDA) vs asset **velocity** (bottom-right, e.g. Walmart).")
+
+        # -- ROE league table
+        with right:
+            roe = rat["roe"].dropna().sort_values()
+            fig = go.Figure()
+            fig.add_bar(x=roe.values, y=roe.index, orientation="h",
+                        marker_color=MINT)
+            fig.update_layout(title="Return on equity by company (latest FY)",
+                              xaxis_tickformat=".0%")
+            st.plotly_chart(themed(fig, 380), width="stretch")
+            st.caption("ROE is the headline; the DuPont map on the left shows "
+                       "*how* each name gets there.")
+
+        st.write("")
+        pct = "{:.1%}"
+        st.dataframe(
+            rat.style.format({
+                "current_ratio": "{:.2f}", "quick_ratio": "{:.2f}",
+                "debt_to_equity": "{:.2f}", "interest_coverage": "{:.1f}",
+                "gross_margin": pct, "operating_margin": pct, "net_margin": pct,
+                "roa": pct, "roe": pct, "asset_turnover": "{:.2f}"}),
+            width="stretch")
+        st.caption("Liquidity · leverage · profitability · efficiency. Blanks are "
+                   "line items a filer doesn't report (e.g. banks have no current "
+                   "ratio — no classified balance sheet).")
+
+
+# ---------------------------------------------------------------- Ask the Agent
+
+with tabs[6]:
     from src.agent import memo as agent
 
     llm_ready = agent._client() is not None
