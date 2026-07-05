@@ -3,12 +3,12 @@
 *A junior quant risk analyst, automated.*
 
 ![Python](https://img.shields.io/badge/python-3.11+-00E5A0?logo=python&logoColor=white&labelColor=0B0E14)
-![Tests](https://img.shields.io/badge/tests-34%20passing-00E5A0?labelColor=0B0E14)
+![Tests](https://img.shields.io/badge/tests-49%20passing-00E5A0?labelColor=0B0E14)
 ![FastAPI](https://img.shields.io/badge/API-FastAPI-00E5A0?logo=fastapi&logoColor=white&labelColor=0B0E14)
 ![PyTorch](https://img.shields.io/badge/ML-PyTorch%20%2B%20sklearn-00E5A0?logo=pytorch&logoColor=white&labelColor=0B0E14)
 ![Streamlit](https://img.shields.io/badge/dashboard-Streamlit-00E5A0?logo=streamlit&logoColor=white&labelColor=0B0E14)
 
-**[Showcase site →](https://sentinel-eight-xi.vercel.app)** · **[Live dashboard →](https://sentinel-risk.streamlit.app)** <!-- TODO: real Streamlit URL after deploy -->
+**[Showcase site →](https://sentinel-eight-xi.vercel.app)** · **[Live dashboard →](https://sentinel-risk.streamlit.app)**
 
 **Sentinel is an open-source agentic financial risk management engine**: it
 ingests market data, computes portfolio risk metrics (volatility, historical
@@ -110,7 +110,7 @@ correctly identifies this as the binding constraint.
 | [`src/models/stress.py`](src/models/stress.py) | Parameterized scenario engine (vol multiplier + drift shocks) replayed over history |
 | [`src/agent/memo.py`](src/agent/memo.py) | Claude agent with 5 tools over the engine; writes the memo, answers questions; deterministic fallback without a key |
 | [`src/api/main.py`](src/api/main.py) | FastAPI: `/metrics`, `/stress`, `/anomalies`, `/ask`, `/memo` — typed responses, self-bootstrapping data |
-| [`dashboard/`](dashboard/app.py) | Streamlit risk terminal — dark, mint-accent, five tabs including "Ask the Agent" |
+| [`dashboard/`](dashboard/app.py) | Streamlit risk terminal — dark, mint-accent, six tabs including "Ask the Agent" |
 | [`site/`](site/) | Next.js + Tailwind + framer-motion showcase page (Vercel) |
 | [`notebooks/`](notebooks/) | The narrative analysis: executed notebooks with key-findings cells |
 
@@ -123,7 +123,7 @@ pip install -r requirements.txt
 copy .env.example .env                              # optional: add ANTHROPIC_API_KEY for the AI memo
 
 # 2. Pick your surface
-pytest                                              # 34 tests, no network needed
+pytest                                              # 49 tests, no network needed
 uvicorn src.api.main:app --port 8000                # API  -> http://localhost:8000/docs
 streamlit run dashboard/app.py                      # dashboard -> http://localhost:8501
 docker compose up --build                           # containerized API
