@@ -155,7 +155,7 @@ with tabs[0]:
     fig.add_scatter(x=port_wealth.index, y=port_wealth, name="PORTFOLIO",
                     line=dict(width=2.5, color=MINT))
     fig.update_layout(title="Growth of $1 — constituents vs equal-weight portfolio")
-    st.plotly_chart(themed(fig), use_container_width=True)
+    st.plotly_chart(themed(fig), width="stretch")
 
     roll = risk.rolling_vol(port)
     fig = go.Figure()
@@ -165,7 +165,7 @@ with tabs[0]:
                   annotation_text="full-sample")
     fig.update_layout(title="Portfolio rolling volatility (annualized)",
                       yaxis_tickformat=".0%")
-    st.plotly_chart(themed(fig, 320), use_container_width=True)
+    st.plotly_chart(themed(fig, 320), width="stretch")
 
 
 # ---------------------------------------------------------------- Deep Dive
@@ -212,7 +212,7 @@ with tabs[1]:
                     name="99%", marker_color=MUTED)
         fig.update_layout(barmode="group", title="Daily tail risk — three methodologies",
                           yaxis_tickformat=".2%")
-        st.plotly_chart(themed(fig, 380), use_container_width=True)
+        st.plotly_chart(themed(fig, 380), width="stretch")
         bt = risk.kupiec_test(port)
         verdict = "✅ not rejected" if bt["passes"] else "❌ REJECTED"
         st.caption(f"**VaR95 backtest (Kupiec POF, rolling {risk.VAR_BACKTEST_WINDOW}d "
@@ -231,7 +231,7 @@ with tabs[1]:
                     marker_color=MINT)
         fig.update_layout(barmode="group", yaxis_tickformat=".0%",
                           title="Capital vs risk — Euler decomposition of portfolio vol")
-        st.plotly_chart(themed(fig, 380), use_container_width=True)
+        st.plotly_chart(themed(fig, 380), width="stretch")
         top = contrib.iloc[0]
         st.caption(f"**{contrib.index[0]}** holds {top['weight']:.0%} of capital but "
                    f"contributes {top['pct_of_risk']:.0%} of portfolio risk — "
@@ -246,11 +246,11 @@ with tabs[1]:
     fig.update_layout(title=f"Underwater plot — longest recovery: "
                             f"{risk.max_drawdown_duration(port)} trading days",
                       yaxis_tickformat=".0%")
-    st.plotly_chart(themed(fig, 320), use_container_width=True)
+    st.plotly_chart(themed(fig, 320), width="stretch")
 
     st.dataframe(
         risk.summary(returns).round(3).sort_values("sharpe", ascending=False),
-        use_container_width=True, height=320)
+        width="stretch", height=320)
     st.caption("Full risk battery per name: Sharpe/Sortino (rf = "
                f"{risk.RISK_FREE_RATE:.0%}), three tail measures, and higher "
                "moments. Negative skew + excess kurtosis = fatter left tails "
@@ -276,12 +276,12 @@ with tabs[2]:
                                 line=dict(color=TEXT, width=0.5)))
     fig.update_layout(title="Portfolio returns — anomalous days highlighted",
                       yaxis_tickformat=".1%")
-    st.plotly_chart(themed(fig), use_container_width=True)
+    st.plotly_chart(themed(fig), width="stretch")
 
     st.caption("IsolationForest + PyTorch autoencoder over per-name returns and "
                "rolling vol. Mint = both models agree (high conviction).")
     flagged = anoms[anoms["if_flag"] | anoms["ae_flag"]].sort_index(ascending=False)
-    st.dataframe(flagged.round(4), use_container_width=True, height=320)
+    st.dataframe(flagged.round(4), width="stretch", height=320)
 
 
 # ---------------------------------------------------------------- Network
@@ -315,14 +315,14 @@ with tabs[3]:
     # pad ranges so labels/markers at layout extremes don't clip
     fig.update_xaxes(range=[nodes["x"].min() - 0.35, nodes["x"].max() + 0.35])
     fig.update_yaxes(range=[nodes["y"].min() - 0.3, nodes["y"].max() + 0.35])
-    st.plotly_chart(themed(fig, 560), use_container_width=True)
+    st.plotly_chart(themed(fig, 560), width="stretch")
 
     st.caption("Communities are discovered from returns alone (no sector labels). "
                "A mint ring = the name's recent correlation profile shifted > 2σ "
                "from its long-run pattern.")
     st.dataframe(nodes[["centrality", "cluster", "shift_z", "anomalous"]]
                  .sort_values("centrality", ascending=False).round(3),
-                 use_container_width=True, height=280)
+                 width="stretch", height=280)
 
 
 # ---------------------------------------------------------------- Stress Test
@@ -354,12 +354,12 @@ with tabs[4]:
                 name=name.replace("_", " "), marker_color=MINT)
     fig.update_layout(barmode="group", yaxis_tickformat=".0%",
                       title="Before vs after — scenario damage")
-    st.plotly_chart(themed(fig, 380), use_container_width=True)
+    st.plotly_chart(themed(fig, 380), width="stretch")
 
     st.dataframe(
         table.style.format({"ann_return": "{:.1%}", "ann_vol": "{:.1%}",
                             "var_95": "{:.2%}", "max_drawdown": "{:.1%}"}),
-        use_container_width=True)
+        width="stretch")
 
 
 # ---------------------------------------------------------------- Ask the Agent
