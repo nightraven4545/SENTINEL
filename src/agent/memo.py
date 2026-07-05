@@ -54,10 +54,21 @@ def gather_context() -> dict:
     anoms = detect_anomalies(r)
     agreed = anoms[anoms["both_flag"]]
     payload = graph_payload(r)
+    port = risk.portfolio_returns(r)
+    try:  # CAPM vs SPY — optional: memo still works if the benchmark is missing
+        from src.ingest.market import fetch_benchmark
+        capm_vs_spy = {k: round(v, 4) for k, v in
+                       risk.capm(port, fetch_benchmark()).items()}
+    except Exception:
+        capm_vs_spy = None
     return {
         "as_of": str(r.index.max().date()),
         "tickers": list(r.columns),
         "risk_summary": risk.summary(r).round(4).to_dict(orient="index"),
+        "capm_vs_spy": capm_vs_spy,
+        "risk_contributions": risk.risk_contributions(r).round(4)
+                                  .to_dict(orient="index"),
+        "var_backtest_kupiec": risk.kupiec_test(port),
         "anomalies": {
             "if_flags": int(anoms["if_flag"].sum()),
             "ae_flags": int(anoms["ae_flag"].sum()),

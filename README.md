@@ -104,7 +104,7 @@ correctly identifies this as the binding constraint.
 |---|---|
 | [`src/ingest/market.py`](src/ingest/market.py) | Daily OHLCV via yfinance; parquet cache; gap handling that bridges halts but never invents pre-listing history |
 | [`src/warehouse/duck.py`](src/warehouse/duck.py) | DuckDB warehouse; returns derived **in SQL** so every consumer shares one source of truth |
-| [`src/models/risk.py`](src/models/risk.py) | Annualized return/vol, rolling vol, historical VaR 95/99, max drawdown, correlations — each with the finance explained |
+| [`src/models/risk.py`](src/models/risk.py) | Full risk battery: vol, historical + Cornish-Fisher VaR, Expected Shortfall, Sharpe/Sortino/Calmar, CAPM vs SPY (beta/alpha/IR), Euler risk-contribution decomposition, and a rolling out-of-sample Kupiec VaR backtest — each with the finance explained |
 | [`src/models/anomaly.py`](src/models/anomaly.py) | IsolationForest + autoencoder (20→8→3→8→20) over per-name returns and rolling vol; agreement flag |
 | [`src/models/graph.py`](src/models/graph.py) | Correlation network, per-component eigenvector centrality, communities, 63-day correlation-shift detector |
 | [`src/models/stress.py`](src/models/stress.py) | Parameterized scenario engine (vol multiplier + drift shocks) replayed over history |
@@ -174,10 +174,14 @@ autoencoder that learns to reconstruct "normal" market days and flags high
 reconstruction error. Days where both agree are the high-conviction signal —
 in this sample, exactly the COVID crash and the 2025 tariff shock.
 
-**How is Value-at-Risk calculated?**
-Historical (non-parametric) VaR: the empirical quantile of realized daily
-returns, reported as a positive loss fraction — no normality assumption, so
-fat tails are captured as observed.
+**How is tail risk measured?**
+Three ways, deliberately: historical VaR (empirical quantile, no distributional
+assumption), Cornish-Fisher modified VaR (parametric, adjusted for the sample's
+skewness and excess kurtosis), and Expected Shortfall (mean loss beyond VaR —
+the coherent measure Basel's FRTB standardized on). The VaR model is then
+**backtested out-of-sample**: each day's VaR uses only the trailing 250 days,
+and Kupiec's proportion-of-failures test checks the realized breach rate
+against the promised one.
 
 **Can I use it with my own portfolio?**
 Yes — set `SENTINEL_TICKERS` in `.env` to any list of Yahoo Finance symbols.

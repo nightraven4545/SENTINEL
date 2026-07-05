@@ -64,9 +64,15 @@ def _anomalies() -> pd.DataFrame:
 class RiskMetrics(BaseModel):
     ann_return: float
     ann_vol: float
+    sharpe: float = Field(description="Annualized excess return / total vol")
+    sortino: float = Field(description="Annualized excess return / downside deviation")
     var_95: float = Field(description="Historical daily VaR 95% (positive loss fraction)")
+    cf_var_95: float = Field(description="Cornish-Fisher modified VaR 95% (skew/kurtosis-adjusted)")
+    es_95: float = Field(description="Expected Shortfall 95%: mean loss beyond VaR")
     var_99: float
     max_drawdown: float = Field(description="Worst peak-to-trough loss (negative)")
+    skew: float
+    ex_kurtosis: float
 
 
 class MetricsResponse(BaseModel):

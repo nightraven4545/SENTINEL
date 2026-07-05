@@ -112,7 +112,17 @@ returns = load_returns()
 from src.models import risk  # noqa: E402  (after sys.path fix)
 
 port = risk.portfolio_returns(returns)
-tabs = st.tabs(["Overview", "Anomalies", "Network", "Stress Test", "Ask the Agent"])
+tabs = st.tabs(["Overview", "Deep Dive", "Anomalies", "Network", "Stress Test",
+                "Ask the Agent"])
+
+
+@st.cache_data(show_spinner="Loading benchmark…")
+def load_benchmark() -> pd.Series | None:
+    try:
+        from src.ingest.market import fetch_benchmark
+        return fetch_benchmark()
+    except Exception:
+        return None  # CAPM cards degrade gracefully if SPY is unavailable
 
 
 # ---------------------------------------------------------------- Overview
@@ -158,9 +168,99 @@ with tabs[0]:
     st.plotly_chart(themed(fig, 320), use_container_width=True)
 
 
-# ---------------------------------------------------------------- Anomalies
+# ---------------------------------------------------------------- Deep Dive
 
 with tabs[1]:
+    bench = load_benchmark()
+
+    # -- risk-adjusted ratios + CAPM vs SPY
+    c = st.columns(5)
+    kpi(c[0], "Sharpe", f"{float(risk.sharpe_ratio(port)):.2f}",
+        f"rf = {risk.RISK_FREE_RATE:.0%}", "flat")
+    kpi(c[1], "Sortino", f"{float(risk.sortino_ratio(port)):.2f}",
+        "downside-only vol", "flat")
+    kpi(c[2], "Calmar", f"{float(risk.calmar_ratio(port)):.2f}",
+        "return / |max DD|", "flat")
+    if bench is not None:
+        stats = risk.capm(port, bench)
+        kpi(c[3], "Beta vs SPY", f"{stats['beta']:.2f}",
+            f"R² {stats['r2']:.2f}", "flat")
+        alpha_dir = "up" if stats["alpha_ann"] > 0 else "down"
+        kpi(c[4], "Alpha (ann.)", f"{stats['alpha_ann']:+.1%}",
+            f"IR {stats['information_ratio']:.2f} · TE {stats['tracking_error']:.1%}",
+            alpha_dir)
+    else:
+        kpi(c[3], "Beta vs SPY", "—", "benchmark unavailable", "flat")
+        kpi(c[4], "Alpha (ann.)", "—", "benchmark unavailable", "flat")
+
+    st.write("")
+    left, right = st.columns(2, gap="large")
+
+    # -- VaR methodology comparison: three answers to "how bad is bad?"
+    with left:
+        methods = {
+            "Historical VaR": (risk.hist_var(port, 0.95), risk.hist_var(port, 0.99)),
+            "Cornish-Fisher VaR": (risk.cornish_fisher_var(port, 0.95),
+                                   risk.cornish_fisher_var(port, 0.99)),
+            "Expected Shortfall": (risk.expected_shortfall(port, 0.95),
+                                   risk.expected_shortfall(port, 0.99)),
+        }
+        fig = go.Figure()
+        fig.add_bar(x=list(methods), y=[float(v[0]) for v in methods.values()],
+                    name="95%", marker_color=MINT)
+        fig.add_bar(x=list(methods), y=[float(v[1]) for v in methods.values()],
+                    name="99%", marker_color=MUTED)
+        fig.update_layout(barmode="group", title="Daily tail risk — three methodologies",
+                          yaxis_tickformat=".2%")
+        st.plotly_chart(themed(fig, 380), use_container_width=True)
+        bt = risk.kupiec_test(port)
+        verdict = "✅ not rejected" if bt["passes"] else "❌ REJECTED"
+        st.caption(f"**VaR95 backtest (Kupiec POF, rolling {risk.VAR_BACKTEST_WINDOW}d "
+                   f"out-of-sample):** {bt['breaches']} breaches vs "
+                   f"{bt['expected_breaches']} expected over {bt['observations']} days "
+                   f"— model {verdict} (p = {bt['p_value']:.2f}).")
+
+    # -- Euler risk decomposition: weight vs actual share of risk
+    with right:
+        contrib = risk.risk_contributions(returns).sort_values("pct_of_risk",
+                                                               ascending=False)
+        fig = go.Figure()
+        fig.add_bar(x=contrib.index, y=contrib["weight"], name="capital weight",
+                    marker_color=MUTED)
+        fig.add_bar(x=contrib.index, y=contrib["pct_of_risk"], name="share of risk",
+                    marker_color=MINT)
+        fig.update_layout(barmode="group", yaxis_tickformat=".0%",
+                          title="Capital vs risk — Euler decomposition of portfolio vol")
+        st.plotly_chart(themed(fig, 380), use_container_width=True)
+        top = contrib.iloc[0]
+        st.caption(f"**{contrib.index[0]}** holds {top['weight']:.0%} of capital but "
+                   f"contributes {top['pct_of_risk']:.0%} of portfolio risk — "
+                   "equal weight is not equal risk.")
+
+    # -- underwater plot: depth AND duration of drawdowns
+    dd = risk.drawdown_series(port)
+    fig = go.Figure()
+    fig.add_scatter(x=dd.index, y=dd, fill="tozeroy", name="drawdown",
+                    line=dict(width=1, color=MINT),
+                    fillcolor="rgba(0,229,160,0.12)")
+    fig.update_layout(title=f"Underwater plot — longest recovery: "
+                            f"{risk.max_drawdown_duration(port)} trading days",
+                      yaxis_tickformat=".0%")
+    st.plotly_chart(themed(fig, 320), use_container_width=True)
+
+    st.dataframe(
+        risk.summary(returns).round(3).sort_values("sharpe", ascending=False),
+        use_container_width=True, height=320)
+    st.caption("Full risk battery per name: Sharpe/Sortino (rf = "
+               f"{risk.RISK_FREE_RATE:.0%}), three tail measures, and higher "
+               "moments. Negative skew + excess kurtosis = fatter left tails "
+               "than the normal VaR assumes — exactly why Cornish-Fisher and "
+               "ES sit above historical VaR.")
+
+
+# ---------------------------------------------------------------- Anomalies
+
+with tabs[2]:
     anoms = load_anomalies()
     aligned = port.loc[anoms.index]
     one_model = (anoms["if_flag"] | anoms["ae_flag"]) & ~anoms["both_flag"]
@@ -186,7 +286,7 @@ with tabs[1]:
 
 # ---------------------------------------------------------------- Network
 
-with tabs[2]:
+with tabs[3]:
     payload = load_graph()
     nodes = pd.DataFrame(payload["nodes"]).set_index("id")
 
@@ -227,7 +327,7 @@ with tabs[2]:
 
 # ---------------------------------------------------------------- Stress Test
 
-with tabs[3]:
+with tabs[4]:
     from src.models.stress import SCENARIOS
 
     table = load_stress()
@@ -264,7 +364,7 @@ with tabs[3]:
 
 # ---------------------------------------------------------------- Ask the Agent
 
-with tabs[4]:
+with tabs[5]:
     from src.agent import memo as agent
 
     llm_ready = agent._client() is not None

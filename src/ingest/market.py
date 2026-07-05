@@ -102,6 +102,49 @@ def fetch_prices(
     return long
 
 
+# Benchmark for CAPM/relative metrics — kept OUT of the warehouse so the
+# portfolio universe stays exactly the configured tickers.
+BENCHMARK_TICKER = "SPY"
+BENCH_CACHE = DATA_DIR / "benchmark.parquet"
+BENCH_SAMPLE = DATA_DIR / "samples" / "benchmark_sample.parquet"
+
+
+def fetch_benchmark(start: str = DEFAULT_START, use_cache: bool = True) -> pd.Series:
+    """Daily benchmark (SPY) returns as a date-indexed Series.
+
+    Same resilience ladder as prices: local cache -> yfinance -> committed
+    sample snapshot (cloud hosts get rate-limited by Yahoo).
+    """
+    if use_cache and BENCH_CACHE.exists():
+        df = pd.read_parquet(BENCH_CACHE)
+        # only serve the cache if it reaches back to the requested start (same
+        # coverage check as fetch_prices) — else an earlier start would give a
+        # silently-truncated CAPM sample.
+        if pd.Timestamp(df["date"].min()) <= pd.Timestamp(start) + pd.Timedelta(days=7):
+            return df.set_index("date")["ret"]
+
+    try:
+        raw = yf.download(BENCHMARK_TICKER, start=start, auto_adjust=True,
+                          progress=False)
+    except Exception:
+        raw = pd.DataFrame()
+    if raw.empty:
+        if BENCH_SAMPLE.exists():
+            return pd.read_parquet(BENCH_SAMPLE).set_index("date")["ret"]
+        raise RuntimeError(f"yfinance returned no data for {BENCHMARK_TICKER}")
+
+    close = raw["Close"]
+    if isinstance(close, pd.DataFrame):  # yf returns 2D for list input
+        close = close.iloc[:, 0]
+    ret = close.pct_change().dropna().rename("ret")
+    ret.index = pd.to_datetime(ret.index).normalize()
+    ret.index.name = "date"
+
+    DATA_DIR.mkdir(exist_ok=True)
+    ret.reset_index().to_parquet(BENCH_CACHE, index=False)
+    return ret
+
+
 if __name__ == "__main__":
     df = fetch_prices()
     print(f"{df['ticker'].nunique()} tickers, {len(df):,} rows, "
