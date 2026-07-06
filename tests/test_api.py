@@ -60,6 +60,32 @@ def test_anomalies_flagged_only(client):
     assert {"date", "if_score", "ae_error", "both_flag"} <= set(days[0])
 
 
+def test_allocation_endpoint(client, monkeypatch):
+    # patch the optimiser (lazily imported in the endpoint) -> hermetic wrapper test
+    import src.models.optimize as opt
+    stats = pd.DataFrame({"Equal-weight": {"return": 0.1, "vol": 0.15, "sharpe": 0.4},
+                          "Max-Sharpe": {"return": 0.2, "vol": 0.18, "sharpe": 0.9}}).T
+    weights = pd.DataFrame({"Equal-weight": {"A": 0.5, "B": 0.5},
+                            "Max-Sharpe": {"A": 0.7, "B": 0.3}})
+    monkeypatch.setattr(opt, "compare_portfolios", lambda r: (stats, weights))
+    body = client.get("/allocation").json()
+    assert set(body["stats"]) == {"Equal-weight", "Max-Sharpe"}
+    assert body["weights"]["Max-Sharpe"]["A"] == pytest.approx(0.7)
+
+
+def test_factors_endpoint(client, monkeypatch):
+    # patch the factor library (lazily imported) with synthetic factors -> hermetic
+    import src.ingest.factors as ff
+    idx = pd.bdate_range("2024-01-01", periods=300)
+    rng = np.random.default_rng(5)
+    fac = pd.DataFrame({c: rng.normal(0, 0.01, 300) for c in ff.FACTORS}, index=idx)
+    fac["rf"] = 0.0001
+    monkeypatch.setattr(ff, "fetch_factors", lambda *a, **k: fac)
+    body = client.get("/factors").json()
+    assert {"alpha_ann", "r2", "betas", "tstats"} <= set(body["portfolio"])
+    assert "mkt_rf" in body["portfolio"]["betas"]
+
+
 def test_ask_without_llm_returns_answer(client):
     body = client.post("/ask", json={"question": "What is the VaR?"}).json()
     assert "ANTHROPIC_API_KEY" in body["answer"]

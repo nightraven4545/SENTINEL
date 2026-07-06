@@ -66,9 +66,11 @@ def context():
 def test_template_memo_without_llm(context):
     text = memo.write_memo(context=context, client=None)
     assert "# Sentinel Risk Memo — 2026-07-02" in text
-    assert "## 5. Recommendation" in text
+    assert "## 6. Recommendation" in text
     assert "15.0%" in text          # ann_vol made it into prose
     assert "market_crash_2008_style" in text
+    # depth lenses absent from this minimal context -> graceful "unavailable"
+    assert "unavailable" in text.lower()
 
 
 def test_llm_memo_uses_client(context, monkeypatch):

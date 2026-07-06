@@ -1,12 +1,16 @@
 """Sentinel API — FastAPI service over the risk engine.
 
 Endpoints:
-  GET  /metrics    portfolio + per-ticker risk metrics
-  POST /stress     run a named stress scenario
-  GET  /anomalies  detected anomalous days
-  POST /ask        the agent answers a free-text question (tool-use)
-  GET  /memo       generate the risk memo (LLM or template fallback)
-  GET  /health     liveness probe (used by Docker healthcheck)
+  GET  /metrics       portfolio + per-ticker risk metrics
+  POST /stress        run a named stress scenario
+  GET  /anomalies     detected anomalous days
+  GET  /fundamentals  EDGAR financial-statement ratios + DuPont
+  GET  /forensic      distress / manipulation screens + Benford
+  GET  /factors       Fama-French factor loadings + factor-adjusted alpha
+  GET  /allocation    optimal portfolios (min-var / max-Sharpe / risk-parity)
+  POST /ask           the agent answers a free-text question (tool-use)
+  GET  /memo          generate the risk memo (LLM or template fallback)
+  GET  /health        liveness probe (used by Docker healthcheck)
 
 Heavy computations (warehouse read, anomaly-model training) are cached per
 process — the models are deterministic over a fixed dataset, so recomputing
@@ -15,6 +19,7 @@ per request would be pure waste.
 from __future__ import annotations
 
 import datetime as dt
+import json
 from contextlib import asynccontextmanager
 from functools import lru_cache
 
@@ -121,6 +126,28 @@ class MemoResponse(BaseModel):
     generated_with_llm: bool
 
 
+class FundamentalsResponse(BaseModel):
+    ratios: dict[str, dict] = Field(description="Per ticker: liquidity/solvency/"
+                                    "profitability/efficiency ratios")
+    dupont: dict[str, dict] = Field(description="Per ticker: 3-step DuPont ROE")
+
+
+class ForensicResponse(BaseModel):
+    scores: dict[str, dict] = Field(description="Per ticker: Altman Z, Piotroski F, "
+                                    "Beneish M, accruals")
+    benford: dict = Field(description="Benford first-digit MAD + verdict")
+
+
+class FactorResponse(BaseModel):
+    portfolio: dict = Field(description="Factor-adjusted alpha, R², betas, t-stats")
+    loadings: dict[str, dict] = Field(description="Per-ticker factor betas + alpha")
+
+
+class AllocationResponse(BaseModel):
+    stats: dict[str, dict] = Field(description="return/vol/Sharpe per portfolio")
+    weights: dict[str, dict] = Field(description="Per portfolio: ticker weights")
+
+
 # ---------------------------------------------------------------- endpoints
 
 @app.get("/health")
@@ -160,6 +187,62 @@ def get_anomalies(flagged_only: bool = True) -> list[AnomalyDay]:
         df = df[df["if_flag"] | df["ae_flag"]]
     return [AnomalyDay(date=idx.date(), **row)
             for idx, row in df.round(6).iterrows()]
+
+
+@app.get("/fundamentals", response_model=FundamentalsResponse)
+def get_fundamentals() -> FundamentalsResponse:
+    try:
+        from src.ingest.edgar import latest_fundamentals
+        from src.models.fundamentals import dupont, ratios
+        w = latest_fundamentals()
+        return FundamentalsResponse(
+            ratios=json.loads(ratios(w).to_json(orient="index")),
+            dupont=json.loads(dupont(w).to_json(orient="index")))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Fundamentals unavailable: {exc}")
+
+
+@app.get("/forensic", response_model=ForensicResponse)
+def get_forensic() -> ForensicResponse:
+    try:
+        from src.ingest.edgar import fetch_fundamentals, latest_fundamentals
+        from src.ingest.market import fetch_prices
+        from src.models import forensic as fx
+        long = fetch_fundamentals()
+        close = fetch_prices().sort_values("date").groupby("ticker")["close"].last()
+        shares = latest_fundamentals(long).get("shares")
+        mcap = (shares * close).dropna() if shares is not None else None
+        return ForensicResponse(
+            scores=json.loads(fx.forensic_summary(long, mcap).to_json(orient="index")),
+            benford=fx.benford_mad(long))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Forensic scores unavailable: {exc}")
+
+
+@app.get("/factors", response_model=FactorResponse)
+def get_factors() -> FactorResponse:
+    try:
+        from src.ingest.factors import fetch_factors
+        from src.models.factors import factor_loadings, portfolio_factor_model
+        f = fetch_factors()
+        m = portfolio_factor_model(_returns(), f)
+        return FactorResponse(
+            portfolio={k: m[k] for k in ("alpha_ann", "alpha_t", "r2", "betas", "tstats")},
+            loadings=json.loads(factor_loadings(_returns(), f).to_json(orient="index")))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Factor model unavailable: {exc}")
+
+
+@app.get("/allocation", response_model=AllocationResponse)
+def get_allocation() -> AllocationResponse:
+    try:
+        from src.models.optimize import compare_portfolios
+        stats, weights = compare_portfolios(_returns())
+        return AllocationResponse(
+            stats=json.loads(stats.to_json(orient="index")),
+            weights=json.loads(weights.to_json()))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Optimization unavailable: {exc}")
 
 
 @app.post("/ask", response_model=AskResponse)

@@ -77,7 +77,86 @@ def gather_context() -> dict:
         "graph": payload,
         "stress": stress.compare(r).round(4).to_dict(orient="index"),
         "scenario_descriptions": {n: s.description for n, s in stress.SCENARIOS.items()},
+        # The CA + CFA depth lenses — each optional so the memo still writes if
+        # EDGAR / the factor library are unreachable (e.g. offline).
+        "factor_model": _factor_context(r),
+        "fundamentals": _fundamentals_context(),
+        "forensic": _forensic_context(),
+        "allocation": _allocation_context(r),
     }
+
+
+def _json_records(df) -> dict:
+    """DataFrame -> plain dict with NaN/None as null (pandas to_json handles the
+    NaN and bool coercion that json.dumps chokes on)."""
+    return json.loads(df.to_json(orient="index"))
+
+
+def _factor_context(r: pd.DataFrame) -> dict | None:
+    """Fama-French factor loadings + factor-adjusted alpha for the portfolio."""
+    try:
+        from src.ingest.factors import fetch_factors
+        from src.models.factors import portfolio_factor_model
+        m = portfolio_factor_model(r, fetch_factors())
+        return {"alpha_ann": round(m["alpha_ann"], 4), "alpha_t": round(m["alpha_t"], 2),
+                "r2": round(m["r2"], 3),
+                "betas": {k: round(v, 3) for k, v in m["betas"].items()},
+                "tstats": {k: round(v, 2) for k, v in m["tstats"].items()}}
+    except Exception:
+        return None
+
+
+def _latest_market_cap():
+    """Market value of equity per ticker (shares × latest close) for Altman."""
+    from src.ingest.edgar import latest_fundamentals
+    from src.ingest.market import fetch_prices
+    close = fetch_prices().sort_values("date").groupby("ticker")["close"].last()
+    shares = latest_fundamentals().get("shares")
+    return (shares * close).dropna() if shares is not None else None
+
+
+def _fundamentals_context() -> dict | None:
+    """Financial-statement ratios + DuPont from EDGAR (CA lens)."""
+    try:
+        from src.ingest.edgar import latest_fundamentals
+        from src.models.fundamentals import ratios
+        rat = ratios(latest_fundamentals())
+        return {"median_roe": round(float(rat["roe"].median()), 4),
+                "median_net_margin": round(float(rat["net_margin"].median()), 4),
+                "median_debt_to_equity": round(float(rat["debt_to_equity"].median()), 4),
+                "ratios": _json_records(rat.round(4))}
+    except Exception:
+        return None
+
+
+def _forensic_context() -> dict | None:
+    """Distress / manipulation screens (Altman, Piotroski, Beneish, Benford)."""
+    try:
+        from src.ingest.edgar import fetch_fundamentals
+        from src.models import forensic as fx
+        long = fetch_fundamentals()
+        summ = fx.forensic_summary(long, _latest_market_cap())
+        return {
+            "altman_distress": [t for t, z in summ["altman_z"].items()
+                                if pd.notna(z) and z < 1.81],
+            "piotroski_strong": [t for t, f in summ["piotroski_f"].items() if f >= 7],
+            "beneish_flags": [t for t, m in summ["m_flag"].items() if m is True],
+            "benford": fx.benford_mad(long),
+            "scores": _json_records(summ),
+        }
+    except Exception:
+        return None
+
+
+def _allocation_context(r: pd.DataFrame) -> dict | None:
+    """Optimal portfolios vs the 1/N book (CFA lens)."""
+    try:
+        from src.models.optimize import compare_portfolios
+        stats, weights = compare_portfolios(r)
+        return {"stats": _json_records(stats.round(4)),
+                "weights": json.loads(weights.round(4).to_json())}
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------- tools
@@ -105,12 +184,49 @@ def _tool_compare_scenarios() -> str:
     return stress.compare(_returns()).round(4).to_json(orient="index")
 
 
+def _tool_fundamentals() -> str:
+    from src.ingest.edgar import latest_fundamentals
+    from src.models.fundamentals import dupont, ratios
+    w = latest_fundamentals()
+    return json.dumps({"ratios": _json_records(ratios(w)),
+                       "dupont": _json_records(dupont(w))})
+
+
+def _tool_forensic() -> str:
+    from src.ingest.edgar import fetch_fundamentals
+    from src.models import forensic as fx
+    long = fetch_fundamentals()
+    return json.dumps({"scores": _json_records(fx.forensic_summary(long, _latest_market_cap())),
+                       "benford": fx.benford_mad(long)})
+
+
+def _tool_factor_model() -> str:
+    from src.ingest.factors import fetch_factors
+    from src.models.factors import factor_loadings, portfolio_factor_model
+    f = fetch_factors()
+    m = portfolio_factor_model(_returns(), f)
+    return json.dumps({
+        "portfolio": {k: m[k] for k in ("alpha_ann", "alpha_t", "r2", "betas", "tstats")},
+        "loadings": _json_records(factor_loadings(_returns(), f))})
+
+
+def _tool_optimization() -> str:
+    from src.models.optimize import compare_portfolios
+    stats, weights = compare_portfolios(_returns())
+    return json.dumps({"stats": _json_records(stats),
+                       "weights": json.loads(weights.to_json())})
+
+
 TOOL_FUNCS = {
     "get_risk_summary": lambda inp: _tool_risk_summary(),
     "get_anomalies": lambda inp: _tool_anomalies(int(inp.get("limit", 20))),
     "get_graph_findings": lambda inp: _tool_graph(),
     "run_stress_scenario": lambda inp: _tool_stress(inp["scenario"]),
     "compare_all_scenarios": lambda inp: _tool_compare_scenarios(),
+    "get_fundamentals": lambda inp: _tool_fundamentals(),
+    "get_forensic_scores": lambda inp: _tool_forensic(),
+    "get_factor_model": lambda inp: _tool_factor_model(),
+    "get_optimal_portfolios": lambda inp: _tool_optimization(),
 }
 
 TOOLS = [
@@ -157,6 +273,35 @@ TOOLS = [
         "description": "Baseline vs every stress scenario in one table.",
         "input_schema": {"type": "object", "properties": {}},
     },
+    {
+        "name": "get_fundamentals",
+        "description": "Financial-statement ratios (liquidity, solvency, "
+                       "profitability, efficiency) and DuPont ROE decomposition "
+                       "per name, from SEC EDGAR 10-K filings.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "get_forensic_scores",
+        "description": "Forensic-accounting screens per name: Altman Z "
+                       "(bankruptcy risk), Piotroski F (0-9 quality), Beneish M "
+                       "(earnings-manipulation), accruals, plus a Benford's-Law "
+                       "digit-conformity check across all reported figures.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "get_factor_model",
+        "description": "Fama-French 5 + momentum regression: portfolio factor "
+                       "loadings (betas) with t-stats, R², and factor-adjusted "
+                       "annualized alpha, plus per-name loadings.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "get_optimal_portfolios",
+        "description": "Markowitz optimisation: return/vol/Sharpe and weights for "
+                       "min-variance, max-Sharpe, risk-parity and the equal-weight "
+                       "baseline.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
 ]
 
 
@@ -189,12 +334,18 @@ Format as markdown with exactly these sections:
 
 # Sentinel Risk Memo — {as_of}
 ## 1. Situation
-## 2. Key Risks
+## 2. Market Risk & Factor Exposure
 ## 3. Anomalies
-## 4. Stress Test Results
-## 5. Recommendation
+## 4. Fundamental & Forensic Screens
+## 5. Stress Tests & Allocation
+## 6. Recommendation
 
-Keep it under 600 words, decision-oriented, numbers quoted precisely.
+Cover both lenses: market/factor risk (VaR, factor loadings, factor-adjusted
+alpha) AND accounting health (ratios, Altman/Piotroski/Beneish/Benford screens).
+In section 5, note whether an optimised portfolio (max-Sharpe / min-variance)
+would improve on the equal-weight book. If a data block is null, say the screen
+was unavailable rather than inventing numbers. Keep it under 800 words,
+decision-oriented, numbers quoted precisely.
 
 DATA:
 {data}
@@ -221,7 +372,8 @@ def write_memo(context: dict | None = None, client=None) -> str:
 
 
 def _template_memo(ctx: dict) -> str:
-    """No-LLM fallback: same structure, filled from the computed numbers."""
+    """No-LLM fallback: same structure, filled from the computed numbers.
+    Each depth lens degrades to a one-line 'unavailable' note if absent."""
     port = ctx["risk_summary"]["PORTFOLIO"]
     stress_rows = "\n".join(
         f"| {name} | {row['ann_vol']:.1%} | {row['var_95']:.2%} | {row['max_drawdown']:.1%} |"
@@ -229,6 +381,41 @@ def _template_memo(ctx: dict) -> str:
     )
     anomaly_dates = ", ".join(ctx["anomalies"]["agreed_dates"][-6:]) or "none"
     worst = max(ctx["stress"], key=lambda k: ctx["stress"][k]["var_95"])
+
+    factor = ctx.get("factor_model")
+    factor_line = (
+        f"A Fama-French 5+momentum regression explains R²={factor['r2']:.0%} of "
+        f"return variance: market beta {factor['betas']['mkt_rf']:.2f}, and a "
+        f"factor-adjusted alpha of {factor['alpha_ann']:+.1%} "
+        f"(t={factor['alpha_t']:.1f}) survives stripping all six factors."
+        if factor else "Factor decomposition unavailable.")
+
+    fund, forensic = ctx.get("fundamentals"), ctx.get("forensic")
+    if fund and forensic:
+        distress = ", ".join(forensic["altman_distress"]) or "none"
+        flags = ", ".join(forensic["beneish_flags"]) or "none"
+        strong = ", ".join(forensic["piotroski_strong"]) or "none"
+        fundamental_block = (
+            f"Median ROE {fund['median_roe']:.0%}, net margin "
+            f"{fund['median_net_margin']:.0%}, debt/equity "
+            f"{fund['median_debt_to_equity']:.2f}. Altman distress: {distress}. "
+            f"High Piotroski quality (F>=7): {strong}. Beneish manipulation flags: "
+            f"{flags} (rapid-growth names can false-positive). Benford first-digit "
+            f"conformity across all filings: {forensic['benford']['verdict']}.")
+    else:
+        fundamental_block = "Fundamental and forensic screens unavailable (EDGAR)."
+
+    alloc = ctx.get("allocation")
+    if alloc:
+        s = alloc["stats"]
+        alloc_line = (
+            f"The equal-weight book runs a Sharpe of {s['Equal-weight']['sharpe']:.2f}. "
+            f"A max-Sharpe tilt would raise that to {s['Max-Sharpe']['sharpe']:.2f}; "
+            f"a min-variance mix cuts volatility to {s['Min-variance']['vol']:.1%} "
+            f"(vs {s['Equal-weight']['vol']:.1%} equal-weight).")
+    else:
+        alloc_line = "Portfolio optimisation unavailable."
+
     return f"""# Sentinel Risk Memo — {ctx['as_of']}
 
 *(Template memo — set ANTHROPIC_API_KEY for the full AI-written analysis.)*
@@ -238,26 +425,31 @@ Equal-weight portfolio of {len(ctx['tickers'])} names ({', '.join(ctx['tickers']
 Annualized vol {port['ann_vol']:.1%}, VaR95 {port['var_95']:.2%}/day, worst
 historical drawdown {port['max_drawdown']:.1%}.
 
-## 2. Key Risks
+## 2. Market Risk & Factor Exposure
 Portfolio vol is below every single constituent — diversification is working.
 Systemic risk concentrates in the highest-centrality names in the correlation
-network; the tech cluster moves as one block.
+network; the tech cluster moves as one block. {factor_line}
 
 ## 3. Anomalies
 Both detectors (IsolationForest + autoencoder) currently agree on
 {len(ctx['anomalies']['agreed_dates'])} anomalous days. Most recent agreed
 anomalies: {anomaly_dates}.
 
-## 4. Stress Test Results
+## 4. Fundamental & Forensic Screens
+{fundamental_block}
+
+## 5. Stress Tests & Allocation
 | scenario | ann_vol | VaR95 | max drawdown |
 |---|---|---|---|
 {stress_rows}
 
-## 5. Recommendation
+{alloc_line}
+
+## 6. Recommendation
 The binding constraint is the systemic scenario ({worst}): diversification
 across sectors does not survive correlated drawdowns. Maintain the equal-weight
-structure, monitor the anomaly agreement signal, and size exposure to survive
-the worst-case drawdown above.
+structure, monitor the anomaly agreement signal, watch any name flagged by the
+forensic screens, and size exposure to survive the worst-case drawdown above.
 """
 
 
