@@ -113,7 +113,7 @@ from src.models import risk  # noqa: E402  (after sys.path fix)
 
 port = risk.portfolio_returns(returns)
 tabs = st.tabs(["Overview", "Deep Dive", "Anomalies", "Network", "Stress Test",
-                "Fundamentals", "Forensic", "Ask the Agent"])
+                "Fundamentals", "Forensic", "Factors", "Ask the Agent"])
 
 
 @st.cache_data(show_spinner="Loading benchmark…")
@@ -158,6 +158,19 @@ def load_forensic():
             "benford": fx.benford_distribution(long),
             "benford_mad": fx.benford_mad(long),
         }
+    except Exception:
+        return None
+
+
+@st.cache_data(show_spinner="Fetching Fama-French factors…")
+def load_factor_model():
+    """Portfolio factor regression + per-name loadings, or None if the factor
+    library (and its committed snapshot) can't be reached."""
+    try:
+        from src.ingest.factors import fetch_factors
+        from src.models.factors import factor_loadings, portfolio_factor_model
+        f = fetch_factors()
+        return portfolio_factor_model(returns, f), factor_loadings(returns, f)
     except Exception:
         return None
 
@@ -559,9 +572,76 @@ with tabs[6]:
                    "model that doesn't apply to that filer (banks/utilities).")
 
 
-# ---------------------------------------------------------------- Ask the Agent
+# ---------------------------------------------------------------- Factors
 
 with tabs[7]:
+    st.caption("Factor lens — Fama-French 5 + momentum. The Deep Dive tab's CAPM "
+               "uses one factor (the market); this uses six to separate *style "
+               "exposure* from genuine *skill* (alpha that survives the factors).")
+    fm = load_factor_model()
+    if fm is None:
+        st.warning("Factor data unavailable — Ken French library and snapshot "
+                   "both unreachable.")
+    else:
+        model, loadings = fm
+        FLABEL = {"mkt_rf": "Market", "smb": "Size", "hml": "Value",
+                  "rmw": "Profit.", "cma": "Invest.", "mom": "Momentum"}
+        order = list(FLABEL)
+
+        c = st.columns(4)
+        adir = "up" if model["alpha_ann"] > 0 else "down"
+        kpi(c[0], "Factor alpha (ann.)", f"{model['alpha_ann']:+.1%}",
+            f"t = {model['alpha_t']:.2f}", adir)
+        kpi(c[1], "Market beta", f"{model['betas']['mkt_rf']:.2f}",
+            "sensitivity to the market", "flat")
+        kpi(c[2], "Model R²", f"{model['r2']:.2f}",
+            f"{model['n']:,} trading days", "flat")
+        nsig = sum(abs(model["tstats"][f]) > 1.96 for f in order)
+        kpi(c[3], "Significant tilts", f"{nsig}/6", "|t| > 1.96", "flat")
+
+        st.write("")
+        left, right = st.columns(2, gap="large")
+
+        # -- portfolio loadings (significant tilts in mint, rest muted)
+        with left:
+            betas = [model["betas"][f] for f in order]
+            colors = [MINT if abs(model["tstats"][f]) > 1.96 else MUTED for f in order]
+            fig = go.Figure()
+            fig.add_bar(x=[FLABEL[f] for f in order], y=betas, marker_color=colors,
+                        text=[f"t={model['tstats'][f]:.1f}" for f in order],
+                        textposition="outside", textfont=dict(size=10, color=MUTED))
+            fig.add_hline(y=0, line=dict(color=BORDER, width=1))
+            fig.update_layout(title="Portfolio factor loadings (β)")
+            st.plotly_chart(themed(fig, 380), width="stretch")
+            st.caption("Mint = statistically significant (|t| > 1.96). This "
+                       "portfolio is large-cap (negative Size) and quality-tilted, "
+                       "with alpha left over after all six factors.")
+
+        # -- per-name loadings heatmap
+        with right:
+            z = loadings[order]
+            fig = go.Figure(go.Heatmap(
+                z=z.values, x=[FLABEL[f] for f in order], y=list(z.index),
+                colorscale=[[0, RED], [0.5, CARD], [1, MINT]], zmid=0,
+                colorbar=dict(title="β")))
+            fig.update_layout(title="Factor exposures by name")
+            st.plotly_chart(themed(fig, 380), width="stretch")
+            st.caption("Value (HML) lights up for JPM/XOM; NVDA carries momentum "
+                       "and a growth (negative Value) tilt — textbook style exposures.")
+
+        st.write("")
+        st.dataframe(
+            loadings.style.format({**{f: "{:+.2f}" for f in order},
+                                   "alpha_ann": "{:+.1%}", "r2": "{:.2f}"}),
+            width="stretch")
+        st.caption("Per-name factor betas, annualized factor-adjusted alpha, and "
+                   "R². Diversifying across names lifts the portfolio R² (0.90) "
+                   "well above most single names — idiosyncratic noise nets out.")
+
+
+# ---------------------------------------------------------------- Ask the Agent
+
+with tabs[8]:
     from src.agent import memo as agent
 
     llm_ready = agent._client() is not None
