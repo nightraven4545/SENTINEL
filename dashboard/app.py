@@ -113,7 +113,7 @@ from src.models import risk  # noqa: E402  (after sys.path fix)
 
 port = risk.portfolio_returns(returns)
 tabs = st.tabs(["Overview", "Deep Dive", "Anomalies", "Network", "Stress Test",
-                "Fundamentals", "Ask the Agent"])
+                "Fundamentals", "Forensic", "Ask the Agent"])
 
 
 @st.cache_data(show_spinner="Loading benchmark…")
@@ -134,6 +134,30 @@ def load_fundamentals():
         from src.models.fundamentals import dupont, ratios
         w = latest_fundamentals()
         return ratios(w), dupont(w)
+    except Exception:
+        return None
+
+
+@st.cache_data(show_spinner="Running forensic screens…")
+def load_forensic():
+    """Forensic scores + Benford. Altman's X4 needs market value of equity, so
+    market cap = latest close × shares outstanding (both from the cloud-safe
+    loaders). Returns None if the data can't be assembled."""
+    try:
+        from src.ingest.edgar import fetch_fundamentals, latest_fundamentals
+        from src.ingest.market import fetch_prices
+        from src.models import forensic as fx
+        long = fetch_fundamentals()
+        last_close = fetch_prices().sort_values("date").groupby("ticker")["close"].last()
+        shares = latest_fundamentals(long).get("shares")
+        mcap = (shares * last_close).dropna() if shares is not None else None
+        return {
+            "summary": fx.forensic_summary(long, mcap),
+            "altman": fx.altman_z(long, mcap),
+            "beneish": fx.beneish_m(long),
+            "benford": fx.benford_distribution(long),
+            "benford_mad": fx.benford_mad(long),
+        }
     except Exception:
         return None
 
@@ -445,9 +469,99 @@ with tabs[5]:
                    "ratio — no classified balance sheet).")
 
 
-# ---------------------------------------------------------------- Ask the Agent
+# ---------------------------------------------------------------- Forensic
 
 with tabs[6]:
+    st.caption("Forensic lens — the distress and earnings-manipulation screens "
+               "auditors, credit desks and short-sellers run. Anomaly detection, "
+               "but on the *financial statements* instead of the price.")
+    fx = load_forensic()
+    if fx is None:
+        st.warning("Forensic scores unavailable — fundamentals could not be loaded.")
+    else:
+        summary, altman, beneish = fx["summary"], fx["altman"], fx["beneish"]
+        bmad = fx["benford_mad"]
+
+        distress = int((summary["altman_z"] < 1.81).sum())
+        strong = int((summary["piotroski_f"] >= 7).sum())
+        flags = int((summary["m_flag"] == True).sum())  # noqa: E712
+        c = st.columns(4)
+        kpi(c[0], "Altman distress", f"{distress}", "names with Z < 1.81",
+            "down" if distress else "flat")
+        kpi(c[1], "Piotroski strong", f"{strong}", "F-score ≥ 7", "flat")
+        kpi(c[2], "Beneish flags", f"{flags}", "M > −1.78 (manipulation)",
+            "down" if flags else "flat")
+        kpi(c[3], "Benford", bmad["verdict"].split()[0].title(),
+            f"MAD {bmad['mad']:.3f} · n={bmad['n']:,}", "flat")
+
+        st.write("")
+        left, right = st.columns(2, gap="large")
+
+        # -- Altman Z with distress/grey/safe zone lines
+        with left:
+            z = altman.dropna(subset=["z_score"]).sort_values("z_score")
+            zcolor = {"safe": MINT, "grey": AMBER, "distress": RED}
+            # Market-value Z can run very high for megacaps (NVDA ≈ 62); clip the
+            # bars so the 1.81/2.99 zone lines stay readable, but label true values.
+            zplot = z["z_score"].clip(upper=13)
+            fig = go.Figure()
+            fig.add_bar(x=zplot, y=z.index, orientation="h",
+                        marker_color=[zcolor.get(v, MUTED) for v in z["zone"]],
+                        text=[f"{v:.1f}" for v in z["z_score"]], textposition="outside",
+                        textfont=dict(color=TEXT, size=10))
+            fig.add_vline(x=1.81, line=dict(color=RED, dash="dot", width=1),
+                          annotation_text="distress")
+            fig.add_vline(x=2.99, line=dict(color=MINT, dash="dot", width=1),
+                          annotation_text="safe")
+            fig.update_layout(title="Altman Z-score — distance from insolvency",
+                              xaxis_range=[0, 15])
+            st.plotly_chart(themed(fig, 380), width="stretch")
+            st.caption("Green safe · amber grey-zone · red distress. Banks and "
+                       "regulated utilities are excluded (the model is calibrated "
+                       "for operating companies).")
+
+        # -- Beneish M with the manipulation threshold
+        with right:
+            m = beneish.dropna(subset=["m_score"]).sort_values("m_score")
+            fig = go.Figure()
+            fig.add_bar(x=m["m_score"], y=m.index, orientation="h",
+                        marker_color=[RED if v else MUTED for v in m["manipulation_flag"]])
+            fig.add_vline(x=-1.78, line=dict(color=RED, dash="dot", width=1),
+                          annotation_text="−1.78 flag")
+            fig.update_layout(title="Beneish M-score — earnings-manipulation screen")
+            st.plotly_chart(themed(fig, 380), width="stretch")
+            st.caption("Above −1.78 flags likely manipulation. Beneish penalises "
+                       "rapid sales growth, so hyper-growth names (e.g. NVDA) can "
+                       "trip it — a false positive worth reading, not a verdict.")
+
+        # -- Benford's Law: do the reported digits look natural?
+        st.write("")
+        b = fx["benford"]
+        fig = go.Figure()
+        fig.add_bar(x=list(b.index), y=b["observed"], name="observed",
+                    marker_color=MINT)
+        fig.add_scatter(x=list(b.index), y=b["expected"], name="Benford expected",
+                        mode="lines+markers", line=dict(color=AMBER, width=2))
+        fig.update_layout(title="Benford's Law — first digit of every reported figure",
+                          xaxis_title="leading digit", yaxis_tickformat=".0%",
+                          xaxis=dict(tickmode="linear"))
+        st.plotly_chart(themed(fig, 320), width="stretch")
+
+        st.write("")
+        pct = "{:.1%}"
+        st.dataframe(
+            summary.style.format({"altman_z": "{:.2f}", "piotroski_f": "{:.0f}",
+                                  "beneish_m": "{:.2f}", "accruals": pct}),
+            width="stretch")
+        st.caption("One row per name: bankruptcy risk (Altman), fundamental "
+                   "quality 0–9 (Piotroski), manipulation odds (Beneish), and the "
+                   "share of earnings not backed by cash (accruals). Blanks = a "
+                   "model that doesn't apply to that filer (banks/utilities).")
+
+
+# ---------------------------------------------------------------- Ask the Agent
+
+with tabs[7]:
     from src.agent import memo as agent
 
     llm_ready = agent._client() is not None
