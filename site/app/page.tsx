@@ -10,8 +10,10 @@ const STACK = [
   "pandas",
   "PyTorch",
   "scikit-learn",
+  "scipy",
   "NetworkX",
   "DuckDB",
+  "SEC EDGAR",
   "FastAPI",
   "Docker",
   "Anthropic API",
@@ -49,9 +51,12 @@ export default function Page() {
           <p className="max-w-2xl leading-relaxed text-muted">
             Every risk desk runs the same loop: pull data, recompute metrics,
             eyeball charts, write the memo — hours of analyst time producing a
-            report about yesterday. Sentinel automates the loop end to end:
-            metrics, ML anomaly detection, network structure, stress scenarios,
-            and the written memo itself, regenerated on demand in minutes.
+            report about yesterday. Sentinel automates the loop end to end,
+            across two lenses. On the market side: risk metrics, factor
+            exposure, ML anomaly detection, network structure, stress scenarios
+            and optimization. On the fundamental side: ratios, DuPont and
+            forensic-accounting screens straight off SEC filings. Then the agent
+            reads both and writes the memo, regenerated on demand in minutes.
           </p>
         </FadeIn>
       </Section>
@@ -60,7 +65,7 @@ export default function Page() {
         <Diagram />
       </Section>
 
-      <Section kicker="WHAT IT DOES" title="Four analytical layers, one decision-oriented story.">
+      <Section kicker="WHAT IT DOES" title="Two lenses on one portfolio — the markets, and the filings behind them.">
         <Features />
       </Section>
 

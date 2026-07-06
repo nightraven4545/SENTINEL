@@ -45,22 +45,26 @@ export default function Showcase() {
         <pre className="overflow-x-auto p-5 font-mono text-xs leading-relaxed text-ink/90">
           {`# Sentinel Risk Memo — 2026-07-02
 
-## 3. Anomalies
-Both detectors (IsolationForest + autoencoder)
-currently agree on 14 anomalous days. Most
-recent: 2025-04-09 (tariff shock).
+## 2. Market Risk & Factor Exposure
+Sharpe 1.01, beta 0.92 vs SPY. Fama-French
+alpha +7.5% (t=3.7), R² 0.90 — survives all
+six factors. NVDA is 10% of capital, 19% of
+portfolio risk.
 
-## 4. Stress Test Results
-| scenario                | VaR95 | max DD |
-|-------------------------|-------|--------|
-| baseline                | 1.69% | -30.0% |
-| rate_shock              | 2.26% | -38.8% |
-| market_crash_2008_style | 4.56% | -97.2% |
+## 4. Fundamental & Forensic Screens
+AAPL ROE 152% — buyback-shrunk equity, not
+operating strength. NVDA trips Beneish (M
+−1.18): a hypergrowth false positive, not
+manipulation.
 
-## 5. Recommendation
+## 5. Stress Tests & Allocation
+2008-style crash: VaR95 1.7% → 4.6%. A
+max-Sharpe reweight lifts Sharpe 1.01 → 1.18.
+
+## 6. Recommendation
 The binding constraint is the systemic
-scenario: diversification across sectors
-does not survive correlated drawdowns...`}
+scenario: sector diversification does not
+survive correlated drawdowns...`}
         </pre>
       </div>
     </div>

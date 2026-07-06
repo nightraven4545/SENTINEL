@@ -3,9 +3,9 @@
 import { motion } from "framer-motion";
 
 const NODES = [
-  { name: "Data", sub: "yfinance · FRED" },
+  { name: "Data", sub: "yfinance · SEC EDGAR · Ken French" },
   { name: "Warehouse", sub: "DuckDB" },
-  { name: "Models", sub: "sklearn · PyTorch · NetworkX" },
+  { name: "Models", sub: "risk · factor · forensic · optimize" },
   { name: "Agent", sub: "Claude + tool use" },
   { name: "API", sub: "FastAPI · Docker" },
   { name: "Dashboard", sub: "Streamlit" },

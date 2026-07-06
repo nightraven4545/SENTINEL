@@ -4,7 +4,8 @@ import { motion } from "framer-motion";
 import { LINKS } from "../app/config";
 
 const TICKER =
-  "VOL 18.7%  ·  VAR95 1.69%  ·  MAXDD −30.0%  ·  ANOMALIES 14  ·  " +
+  "SHARPE 1.01  ·  ALPHA +7.5%  ·  BETA 0.92  ·  VAR95 1.69%  ·  MAXDD −30.0%  ·  " +
+  "R² 0.90  ·  ANOMALIES 14  ·  ALTMAN · PIOTROSKI · BENEISH · BENFORD  ·  " +
   "AAPL +0.4  MSFT −0.2  NVDA +1.8  JPM +0.1  XOM −0.6  JNJ +0.2  " +
   "PG −0.1  CAT +0.3  NEE −0.4  WMT +0.5  ·  ";
 
@@ -33,9 +34,13 @@ export default function Hero() {
           A junior quant risk analyst, automated.
         </p>
         <p className="mx-auto mt-4 max-w-xl text-sm leading-relaxed text-muted">
-          Ingests market data, detects anomalies with ML, stress-tests the
-          portfolio, maps systemic risk as a network — then an AI agent reads
-          it all and writes the risk memo.
+          Two lenses on one book. A{" "}
+          <span className="text-ink">market-risk engine</span> — VaR, a
+          Fama-French factor model, Markowitz optimization, ML anomaly
+          detection and stress tests. A{" "}
+          <span className="text-ink">forensic-accounting engine</span> —
+          fundamentals, DuPont and manipulation screens straight off SEC
+          filings. Then an AI agent reads both and writes the risk memo.
         </p>
 
         <div className="mt-10 flex flex-wrap items-center justify-center gap-4">
