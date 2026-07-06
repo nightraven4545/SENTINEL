@@ -113,7 +113,7 @@ from src.models import risk  # noqa: E402  (after sys.path fix)
 
 port = risk.portfolio_returns(returns)
 tabs = st.tabs(["Overview", "Deep Dive", "Anomalies", "Network", "Stress Test",
-                "Fundamentals", "Forensic", "Factors", "Ask the Agent"])
+                "Fundamentals", "Forensic", "Factors", "Allocation", "Ask the Agent"])
 
 
 @st.cache_data(show_spinner="Loading benchmark…")
@@ -171,6 +171,24 @@ def load_factor_model():
         from src.models.factors import factor_loadings, portfolio_factor_model
         f = fetch_factors()
         return portfolio_factor_model(returns, f), factor_loadings(returns, f)
+    except Exception:
+        return None
+
+
+@st.cache_data(show_spinner="Optimising portfolios…")
+def load_optimization():
+    """Efficient frontier, optimal portfolios, and per-asset risk/return."""
+    try:
+        import numpy as _np
+        from src.models.optimize import (annualized_moments, compare_portfolios,
+                                          efficient_frontier)
+        from src.models.risk import RISK_FREE_RATE
+        stats, weights = compare_portfolios(returns)
+        mu, cov = annualized_moments(returns)
+        asset_vol = pd.Series(_np.sqrt(_np.diag(cov.to_numpy())), index=returns.columns)
+        return {"stats": stats, "weights": weights,
+                "ef": efficient_frontier(returns, 50),
+                "mu": mu, "asset_vol": asset_vol, "rf": RISK_FREE_RATE}
     except Exception:
         return None
 
@@ -639,9 +657,86 @@ with tabs[7]:
                    "well above most single names — idiosyncratic noise nets out.")
 
 
-# ---------------------------------------------------------------- Ask the Agent
+# ---------------------------------------------------------------- Allocation
 
 with tabs[8]:
+    st.caption("Allocation lens — Markowitz optimisation. Everything else "
+               "analyses the equal-weight book; this asks what the weights "
+               "*should* be. Long-only, fully invested.")
+    opt = load_optimization()
+    if opt is None:
+        st.warning("Optimisation unavailable — returns could not be loaded.")
+    else:
+        stats, weights, ef = opt["stats"], opt["weights"], opt["ef"]
+        eq, mv = stats.loc["Equal-weight"], stats.loc["Min-variance"]
+        ms, rp = stats.loc["Max-Sharpe"], stats.loc["Risk-parity"]
+
+        c = st.columns(4)
+        kpi(c[0], "Max-Sharpe", f"{ms['sharpe']:.2f}",
+            f"vs 1/N {eq['sharpe']:.2f}", "up")
+        kpi(c[1], "Min-variance vol", f"{mv['vol']:.1%}",
+            f"vs 1/N {eq['vol']:.1%}", "up")  # lower risk = good = mint
+        kpi(c[2], "1/N Sharpe", f"{eq['sharpe']:.2f}", "current book", "flat")
+        kpi(c[3], "Risk-parity vol", f"{rp['vol']:.1%}",
+            "equal risk contributions", "flat")
+
+        st.write("")
+        left, right = st.columns([3, 2], gap="large")
+
+        # -- the efficient frontier with assets, the four portfolios, and the CML
+        with left:
+            pcolor = {"Equal-weight": MUTED, "Min-variance": AMBER,
+                      "Max-Sharpe": MINT, "Risk-parity": "#58A6FF"}
+            fig = go.Figure()
+            fig.add_scatter(x=ef["vol"], y=ef["return"], mode="lines",
+                            name="efficient frontier", line=dict(color=MINT, width=2))
+            fig.add_scatter(x=opt["asset_vol"], y=opt["mu"], mode="markers+text",
+                            text=opt["asset_vol"].index, textposition="bottom center",
+                            marker=dict(size=6, color=MUTED), name="assets",
+                            textfont=dict(size=9, color=MUTED))
+            for name, row in stats.iterrows():
+                fig.add_scatter(x=[row["vol"]], y=[row["return"]], mode="markers+text",
+                                text=[name], textposition="top center",
+                                marker=dict(size=13, color=pcolor[name],
+                                            line=dict(width=1, color=TEXT)),
+                                textfont=dict(size=10, color=TEXT), showlegend=False)
+            # capital market line: from the risk-free rate through the tangency portfolio
+            xmax = float(max(opt["asset_vol"].max(), ef["vol"].max())) * 1.05
+            slope = (ms["return"] - opt["rf"]) / ms["vol"]
+            fig.add_scatter(x=[0, xmax], y=[opt["rf"], opt["rf"] + slope * xmax],
+                            mode="lines", name="Capital Market Line",
+                            line=dict(color=AMBER, dash="dash", width=1))
+            fig.update_layout(title="Efficient frontier — risk vs return",
+                              xaxis_title="volatility (ann.)", yaxis_title="return (ann.)",
+                              xaxis_tickformat=".0%", yaxis_tickformat=".0%")
+            st.plotly_chart(themed(fig, 420), width="stretch")
+            st.caption("Each optimal portfolio sits on the frontier; the dashed "
+                       "Capital Market Line runs from the risk-free rate through "
+                       "Max-Sharpe (the best risk-adjusted mix).")
+
+        # -- optimal weights, side by side
+        with right:
+            fig = go.Figure(go.Heatmap(
+                z=weights.values, x=list(weights.columns), y=list(weights.index),
+                colorscale=[[0, CARD], [1, MINT]], zmin=0,
+                colorbar=dict(title="weight", tickformat=".0%")))
+            fig.update_layout(title="Optimal weights by portfolio")
+            st.plotly_chart(themed(fig, 420), width="stretch")
+
+        st.write("")
+        st.dataframe(
+            stats.style.format({"return": "{:.1%}", "vol": "{:.1%}", "sharpe": "{:.2f}"}),
+            width="stretch")
+        st.caption("Max-Sharpe lifts risk-adjusted return above the 1/N book by "
+                   "concentrating in the best reward-per-unit-risk names; "
+                   "Min-variance trades return for the lowest possible risk; "
+                   "Risk-parity equalises each name's risk share (ties back to the "
+                   "Euler decomposition in Deep Dive).")
+
+
+# ---------------------------------------------------------------- Ask the Agent
+
+with tabs[9]:
     from src.agent import memo as agent
 
     llm_ready = agent._client() is not None
