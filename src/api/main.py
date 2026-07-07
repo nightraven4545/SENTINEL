@@ -8,6 +8,7 @@ Endpoints:
   GET  /forensic      distress / manipulation screens + Benford
   GET  /factors       Fama-French factor loadings + factor-adjusted alpha
   GET  /allocation    optimal portfolios (min-var / max-Sharpe / risk-parity)
+  GET  /credit        Merton distance-to-default per name (structural credit)
   POST /ask           the agent answers a free-text question (tool-use)
   GET  /memo          generate the risk memo (LLM or template fallback)
   GET  /health        liveness probe (used by Docker healthcheck)
@@ -148,6 +149,12 @@ class AllocationResponse(BaseModel):
     weights: dict[str, dict] = Field(description="Per portfolio: ticker weights")
 
 
+class CreditResponse(BaseModel):
+    distance_to_default: dict[str, dict] = Field(
+        description="Per ticker (Merton 1974): distance-to-default, implied 1-year "
+        "default probability, asset value/vol, leverage. Banks excluded.")
+
+
 # ---------------------------------------------------------------- endpoints
 
 @app.get("/health")
@@ -243,6 +250,25 @@ def get_allocation() -> AllocationResponse:
             weights=json.loads(weights.to_json()))
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Optimization unavailable: {exc}")
+
+
+@app.get("/credit", response_model=CreditResponse)
+def get_credit() -> CreditResponse:
+    try:
+        from src.ingest.edgar import latest_fundamentals
+        from src.ingest.market import fetch_prices
+        from src.models.credit import default_point, distance_to_default
+        w = latest_fundamentals()
+        close = fetch_prices().sort_values("date").groupby("ticker")["close"].last()
+        shares = w.get("shares")
+        if shares is None:
+            raise ValueError("shares outstanding unavailable")
+        mcap = (shares * close).dropna()
+        dtd = distance_to_default(_returns(), mcap, default_point(w))
+        return CreditResponse(
+            distance_to_default=json.loads(dtd.to_json(orient="index")))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Credit model unavailable: {exc}")
 
 
 @app.post("/ask", response_model=AskResponse)

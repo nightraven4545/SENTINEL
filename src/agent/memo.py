@@ -82,6 +82,7 @@ def gather_context() -> dict:
         "factor_model": _factor_context(r),
         "fundamentals": _fundamentals_context(),
         "forensic": _forensic_context(),
+        "credit": _credit_context(r),
         "allocation": _allocation_context(r),
     }
 
@@ -143,6 +144,29 @@ def _forensic_context() -> dict | None:
             "beneish_flags": [t for t, m in summ["m_flag"].items() if m is True],
             "benford": fx.benford_mad(long),
             "scores": _json_records(summ),
+        }
+    except Exception:
+        return None
+
+
+def _credit_context(r: pd.DataFrame) -> dict | None:
+    """Merton structural distance-to-default per name — the market's read on the
+    same distress the Altman screen scores off the balance sheet."""
+    try:
+        from src.models.credit import default_point, distance_to_default
+        mcap = _latest_market_cap()
+        if mcap is None:
+            return None
+        dtd = distance_to_default(r, mcap, default_point())
+        valid = dtd["distance_to_default"].dropna()
+        if valid.empty:
+            return None
+        return {
+            "thinnest_name": valid.idxmin(),
+            "thinnest_dd": round(float(valid.min()), 2),
+            "median_dd": round(float(valid.median()), 2),
+            "distance_to_default": _json_records(
+                dtd[["distance_to_default", "default_prob", "leverage"]].round(4)),
         }
     except Exception:
         return None
@@ -217,6 +241,12 @@ def _tool_optimization() -> str:
                        "weights": json.loads(weights.to_json())})
 
 
+def _tool_credit() -> str:
+    from src.models.credit import default_point, distance_to_default
+    dtd = distance_to_default(_returns(), _latest_market_cap(), default_point())
+    return dtd.round(4).to_json(orient="index")
+
+
 TOOL_FUNCS = {
     "get_risk_summary": lambda inp: _tool_risk_summary(),
     "get_anomalies": lambda inp: _tool_anomalies(int(inp.get("limit", 20))),
@@ -227,6 +257,7 @@ TOOL_FUNCS = {
     "get_forensic_scores": lambda inp: _tool_forensic(),
     "get_factor_model": lambda inp: _tool_factor_model(),
     "get_optimal_portfolios": lambda inp: _tool_optimization(),
+    "get_distance_to_default": lambda inp: _tool_credit(),
 }
 
 TOOLS = [
@@ -302,6 +333,16 @@ TOOLS = [
                        "baseline.",
         "input_schema": {"type": "object", "properties": {}},
     },
+    {
+        "name": "get_distance_to_default",
+        "description": "Merton (1974) structural credit model per name: "
+                       "distance-to-default (asset-vol standard deviations above the "
+                       "default point), implied 1-year default probability, and "
+                       "leverage. The market's read on distress — the companion to "
+                       "the accounting-based Altman Z. Banks are excluded (no "
+                       "default-point tag).",
+        "input_schema": {"type": "object", "properties": {}},
+    },
 ]
 
 
@@ -341,7 +382,8 @@ Format as markdown with exactly these sections:
 ## 6. Recommendation
 
 Cover both lenses: market/factor risk (VaR, factor loadings, factor-adjusted
-alpha) AND accounting health (ratios, Altman/Piotroski/Beneish/Benford screens).
+alpha) AND accounting health (ratios, Altman/Piotroski/Beneish/Benford screens,
+plus the Merton distance-to-default as the market's structural credit read).
 In section 5, note whether an optimised portfolio (max-Sharpe / min-variance)
 would improve on the equal-weight book. If a data block is null, say the screen
 was unavailable rather than inventing numbers. Keep it under 800 words,
@@ -405,6 +447,16 @@ def _template_memo(ctx: dict) -> str:
     else:
         fundamental_block = "Fundamental and forensic screens unavailable (EDGAR)."
 
+    credit = ctx.get("credit")
+    # ASCII only (no sigma glyph): this text is printed to the Windows console
+    # and rendered into a reportlab PDF, neither of which handles non-cp1252.
+    credit_line = (
+        f"Structural distance-to-default (Merton): the thinnest cushion is "
+        f"{credit['thinnest_name']}, sitting {credit['thinnest_dd']:.1f} standard "
+        f"deviations above its default point (median {credit['median_dd']:.1f}) — "
+        f"the market's read on the same distress Altman scores from the books."
+        if credit else "Structural distance-to-default unavailable.")
+
     alloc = ctx.get("allocation")
     if alloc:
         s = alloc["stats"]
@@ -437,6 +489,8 @@ anomalies: {anomaly_dates}.
 
 ## 4. Fundamental & Forensic Screens
 {fundamental_block}
+
+{credit_line}
 
 ## 5. Stress Tests & Allocation
 | scenario | ann_vol | VaR95 | max drawdown |

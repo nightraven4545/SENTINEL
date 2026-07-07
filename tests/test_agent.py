@@ -73,6 +73,19 @@ def test_template_memo_without_llm(context):
     assert "unavailable" in text.lower()
 
 
+def test_template_memo_includes_credit_when_present(context):
+    ctx = {**context, "credit": {"thinnest_name": "B", "thinnest_dd": 3.4,
+                                 "median_dd": 7.1, "distance_to_default": {}}}
+    text = memo.write_memo(context=ctx, client=None)
+    assert "3.4" in text and "Merton" in text  # credit line rendered with numbers
+    assert "σ" not in text  # ASCII-safe for console + PDF (no sigma glyph)
+
+
+def test_distance_to_default_tool_registered():
+    assert "get_distance_to_default" in memo.TOOL_FUNCS
+    assert any(t["name"] == "get_distance_to_default" for t in memo.TOOLS)
+
+
 def test_llm_memo_uses_client(context, monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     client = FakeClient([SimpleNamespace(

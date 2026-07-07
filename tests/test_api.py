@@ -86,6 +86,27 @@ def test_factors_endpoint(client, monkeypatch):
     assert "mkt_rf" in body["portfolio"]["betas"]
 
 
+def test_credit_endpoint(client, monkeypatch):
+    # patch the Merton solver (lazily imported) + trivial valid mcap inputs
+    import src.ingest.edgar as edgar
+    import src.ingest.market as market
+    import src.models.credit as credit
+    w = pd.DataFrame({"shares": {"A": 10.0, "B": 20.0},
+                      "current_liabilities": {"A": 5.0, "B": 8.0},
+                      "long_term_debt": {"A": 2.0, "B": 3.0}})
+    monkeypatch.setattr(edgar, "latest_fundamentals", lambda *a, **k: w)
+    prices = pd.DataFrame({"date": pd.to_datetime(["2024-01-01", "2024-01-01"]),
+                           "ticker": ["A", "B"], "close": [100.0, 50.0]})
+    monkeypatch.setattr(market, "fetch_prices", lambda *a, **k: prices)
+    dtd = pd.DataFrame({"distance_to_default": {"A": 5.0, "B": 3.0},
+                        "default_prob": {"A": 1e-7, "B": 1e-3},
+                        "leverage": {"A": 0.1, "B": 0.2}})
+    monkeypatch.setattr(credit, "distance_to_default", lambda *a, **k: dtd)
+    body = client.get("/credit").json()
+    assert set(body["distance_to_default"]) == {"A", "B"}
+    assert body["distance_to_default"]["B"]["distance_to_default"] == pytest.approx(3.0)
+
+
 def test_ask_without_llm_returns_answer(client):
     body = client.post("/ask", json={"question": "What is the VaR?"}).json()
     assert "ANTHROPIC_API_KEY" in body["answer"]
