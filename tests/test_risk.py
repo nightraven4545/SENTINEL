@@ -178,3 +178,38 @@ def test_drawdown_duration_counts_underwater_days():
     r = series([1.0, -0.5, 1.2])
     assert max_drawdown_duration(r) == 1
     assert drawdown_series(r).min() == pytest.approx(-0.5)
+
+
+# ---------------------------------------------------------------- EWMA conditional vol
+
+from src.models.risk import EWMA_LAMBDA, ewma_var, ewma_vol
+
+
+def test_ewma_vol_constant_magnitude_returns():
+    # |r| constant -> conditional variance is that constant, at every step
+    r = series([0.01, -0.01] * 500)
+    assert ewma_vol(r).iloc[-1] == pytest.approx(0.01 * np.sqrt(TRADING_DAYS))
+
+
+def test_ewma_vol_reacts_to_a_shock():
+    # a fat return spikes the conditional vol vs the calm run before it
+    r = series([0.001] * 200 + [0.10] + [0.001] * 5)
+    v = ewma_vol(r)
+    assert v.iloc[201] > v.iloc[199] * 3  # the day after the shock
+
+
+def test_ewma_var_scales_with_confidence():
+    rng = np.random.default_rng(7)
+    r = series(rng.normal(0, 0.01, 2_000))
+    assert ewma_var(r, 0.99) > ewma_var(r, 0.95) > 0
+
+
+def test_ewma_var_known_value_on_constant_vol():
+    # daily sigma 0.01 -> VaR95 = |z_0.05| * 0.01
+    r = series([0.01, -0.01] * 500)
+    from scipy.stats import norm
+    assert ewma_var(r, 0.95) == pytest.approx(abs(norm.ppf(0.05)) * 0.01, rel=1e-6)
+
+
+def test_ewma_lambda_is_riskmetrics_daily():
+    assert EWMA_LAMBDA == 0.94

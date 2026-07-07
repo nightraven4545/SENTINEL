@@ -52,6 +52,41 @@ def rolling_vol(returns: pd.DataFrame | pd.Series, window: int = ROLLING_WINDOW)
     return returns.rolling(window).std() * np.sqrt(TRADING_DAYS)
 
 
+# why 0.94: J.P. Morgan RiskMetrics' decay factor for DAILY data — the industry
+# default. Smaller lambda reacts faster to shocks; 0.94 is the calibrated balance.
+EWMA_LAMBDA = 0.94
+
+
+def ewma_vol(returns: pd.DataFrame | pd.Series,
+             lam: float = EWMA_LAMBDA) -> pd.DataFrame | pd.Series:
+    """Exponentially-weighted (RiskMetrics) annualized conditional volatility.
+
+    Rolling vol weights the last `window` days equally then drops them off a
+    cliff; EWMA instead decays weights geometrically, so a shock fades smoothly
+    and recent days matter most. The conditional variance follows the recursion
+    sigma^2_t = lam * sigma^2_{t-1} + (1 - lam) * r^2_{t-1}, which is exactly an
+    EWMA of squared returns under the RiskMetrics zero-mean assumption.
+    """
+    # adjust=False gives the pure recursion above (alpha = 1 - lam).
+    var = (returns ** 2).ewm(alpha=1 - lam, adjust=False).mean()
+    return np.sqrt(var * TRADING_DAYS)
+
+
+def ewma_var(returns: pd.DataFrame | pd.Series, level: float = 0.95,
+             lam: float = EWMA_LAMBDA) -> pd.Series | float:
+    """Parametric VaR from the LATEST EWMA conditional vol, as a positive loss.
+
+    A regime-aware VaR: it uses today's conditional volatility rather than a
+    flat full-sample sigma, so the number rises the moment markets get rough.
+    Zero-mean normal (RiskMetrics), so VaR = |z_{1-level}| * sigma_daily.
+    """
+    z = abs(norm.ppf(1 - level))
+    daily_sigma = ewma_vol(returns, lam) / np.sqrt(TRADING_DAYS)
+    if isinstance(returns, pd.Series):
+        return float(z * daily_sigma.iloc[-1])
+    return z * daily_sigma.iloc[-1]
+
+
 def hist_var(returns: pd.DataFrame | pd.Series, level: float = 0.95) -> pd.Series | float:
     """Historical Value-at-Risk, reported as a POSITIVE loss fraction.
 

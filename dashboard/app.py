@@ -162,6 +162,25 @@ def load_forensic():
         return None
 
 
+@st.cache_data(show_spinner="Solving Merton model…")
+def load_credit():
+    """Merton distance-to-default per name — the market's structural view of the
+    same distress Altman reads off the balance sheet. None if inputs unavailable."""
+    try:
+        from src.ingest.edgar import latest_fundamentals
+        from src.ingest.market import fetch_prices
+        from src.models.credit import default_point, distance_to_default
+        w = latest_fundamentals()
+        last_close = fetch_prices().sort_values("date").groupby("ticker")["close"].last()
+        shares = w.get("shares")
+        if shares is None:
+            return None
+        mcap = (shares * last_close).dropna()
+        return distance_to_default(returns, mcap, default_point(w))
+    except Exception:
+        return None
+
+
 @st.cache_data(show_spinner="Fetching Fama-French factors…")
 def load_factor_model():
     """Portfolio factor regression + per-name loadings, or None if the factor
@@ -226,14 +245,20 @@ with tabs[0]:
     st.plotly_chart(themed(fig), width="stretch")
 
     roll = risk.rolling_vol(port)
+    ewma = risk.ewma_vol(port)
     fig = go.Figure()
     fig.add_scatter(x=roll.index, y=roll, name="21d rolling vol",
-                    line=dict(width=1.5, color=MINT))
+                    line=dict(width=1.2, color=MUTED))
+    fig.add_scatter(x=ewma.index, y=ewma, name=f"EWMA (λ={risk.EWMA_LAMBDA})",
+                    line=dict(width=1.8, color=MINT))
     fig.add_hline(y=full_vol, line=dict(color=MUTED, dash="dot", width=1),
                   annotation_text="full-sample")
-    fig.update_layout(title="Portfolio rolling volatility (annualized)",
+    fig.update_layout(title="Portfolio volatility (annualized) — 21d rolling vs EWMA conditional",
                       yaxis_tickformat=".0%")
     st.plotly_chart(themed(fig, 320), width="stretch")
+    st.caption("EWMA decays the weight on past shocks geometrically (RiskMetrics "
+               f"λ={risk.EWMA_LAMBDA}), so it tracks the regime smoothly where the "
+               "equal-weighted rolling window steps and lags.")
 
 
 # ---------------------------------------------------------------- Deep Dive
@@ -267,20 +292,24 @@ with tabs[1]:
     # -- VaR methodology comparison: three answers to "how bad is bad?"
     with left:
         methods = {
-            "Historical VaR": (risk.hist_var(port, 0.95), risk.hist_var(port, 0.99)),
-            "Cornish-Fisher VaR": (risk.cornish_fisher_var(port, 0.95),
-                                   risk.cornish_fisher_var(port, 0.99)),
+            "Historical": (risk.hist_var(port, 0.95), risk.hist_var(port, 0.99)),
+            "Cornish-Fisher": (risk.cornish_fisher_var(port, 0.95),
+                               risk.cornish_fisher_var(port, 0.99)),
             "Expected Shortfall": (risk.expected_shortfall(port, 0.95),
                                    risk.expected_shortfall(port, 0.99)),
+            "EWMA (today)": (risk.ewma_var(port, 0.95), risk.ewma_var(port, 0.99)),
         }
         fig = go.Figure()
         fig.add_bar(x=list(methods), y=[float(v[0]) for v in methods.values()],
                     name="95%", marker_color=MINT)
         fig.add_bar(x=list(methods), y=[float(v[1]) for v in methods.values()],
                     name="99%", marker_color=MUTED)
-        fig.update_layout(barmode="group", title="Daily tail risk — three methodologies",
+        fig.update_layout(barmode="group", title="Daily tail risk — four methodologies",
                           yaxis_tickformat=".2%")
         st.plotly_chart(themed(fig, 380), width="stretch")
+        st.caption("The first three read the whole sample; **EWMA (today)** uses "
+                   "only the latest conditional volatility — a regime-aware VaR "
+                   "that moves the moment markets turn.")
         bt = risk.kupiec_test(port)
         verdict = "✅ not rejected" if bt["passes"] else "❌ REJECTED"
         st.caption(f"**VaR95 backtest (Kupiec POF, rolling {risk.VAR_BACKTEST_WINDOW}d "
@@ -577,6 +606,34 @@ with tabs[6]:
                           xaxis_title="leading digit", yaxis_tickformat=".0%",
                           xaxis=dict(tickmode="linear"))
         st.plotly_chart(themed(fig, 320), width="stretch")
+
+        # -- Merton distance-to-default: the same distress read from the MARKET
+        credit = load_credit()
+        if credit is not None and credit["distance_to_default"].notna().any():
+            st.write("")
+            dtd = credit.dropna(subset=["distance_to_default"]).sort_values(
+                "distance_to_default")
+            # thinner cushion = redder; > ~4σ above the default point is
+            # comfortably investment-grade, < 2σ is the danger zone.
+            ddcolor = [RED if v < 2 else AMBER if v < 4 else MINT
+                       for v in dtd["distance_to_default"]]
+            fig = go.Figure()
+            fig.add_bar(x=dtd["distance_to_default"], y=dtd.index, orientation="h",
+                        marker_color=ddcolor,
+                        text=[f"{v:.1f}σ" for v in dtd["distance_to_default"]],
+                        textposition="outside", textfont=dict(color=TEXT, size=10))
+            fig.add_vline(x=2, line=dict(color=RED, dash="dot", width=1),
+                          annotation_text="thin")
+            fig.update_layout(
+                title="Merton distance-to-default — the market's credit view",
+                xaxis_title="asset-vol standard deviations above the default point")
+            st.plotly_chart(themed(fig, 320), width="stretch")
+            st.caption("A structural (Merton 1974) model: equity is a call option "
+                       "on the firm's assets, so equity value and volatility imply "
+                       "how many standard deviations it sits above its debt. Altman "
+                       "reads distress from the *accounting*; this reads the same "
+                       "distress from the *market* — and banks drop out here too "
+                       "(no current-liabilities tag for the default point).")
 
         st.write("")
         pct = "{:.1%}"
