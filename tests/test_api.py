@@ -32,10 +32,11 @@ def test_metrics_includes_portfolio_row(client):
     assert "PORTFOLIO" in body["metrics"]
     row = body["metrics"]["PORTFOLIO"]
     assert set(row) == {"ann_return", "ann_vol", "sharpe", "sortino", "var_95",
-                        "cf_var_95", "es_95", "var_99", "max_drawdown", "skew",
-                        "ex_kurtosis"}
+                        "cf_var_95", "es_95", "ewma_var_95", "var_99",
+                        "max_drawdown", "skew", "ex_kurtosis"}
     assert row["var_95"] > 0 and row["max_drawdown"] <= 0
     assert row["es_95"] >= row["var_95"]  # tail mean is at least the threshold
+    assert row["ewma_var_95"] > 0  # today's regime-aware VaR is a positive loss
 
 
 def test_stress_valid_scenario(client):

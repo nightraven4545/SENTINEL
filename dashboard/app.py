@@ -349,7 +349,8 @@ with tabs[1]:
         risk.summary(returns).round(3).sort_values("sharpe", ascending=False),
         width="stretch", height=320)
     st.caption("Full risk battery per name: Sharpe/Sortino (rf = "
-               f"{risk.RISK_FREE_RATE:.0%}), three tail measures, and higher "
+               f"{risk.RISK_FREE_RATE:.0%}), four tail measures (historical, "
+               "Cornish-Fisher, expected shortfall, and today's EWMA), and higher "
                "moments. Negative skew + excess kurtosis = fatter left tails "
                "than the normal VaR assumes — exactly why Cornish-Fisher and "
                "ES sit above historical VaR.")

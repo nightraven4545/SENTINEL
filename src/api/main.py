@@ -75,6 +75,7 @@ class RiskMetrics(BaseModel):
     var_95: float = Field(description="Historical daily VaR 95% (positive loss fraction)")
     cf_var_95: float = Field(description="Cornish-Fisher modified VaR 95% (skew/kurtosis-adjusted)")
     es_95: float = Field(description="Expected Shortfall 95%: mean loss beyond VaR")
+    ewma_var_95: float = Field(description="Regime-aware VaR 95% from the latest EWMA (RiskMetrics) vol")
     var_99: float
     max_drawdown: float = Field(description="Worst peak-to-trough loss (negative)")
     skew: float

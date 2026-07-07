@@ -299,6 +299,8 @@ def summary(returns: pd.DataFrame) -> pd.DataFrame:
         "var_95": hist_var(both, 0.95),
         "cf_var_95": cornish_fisher_var(both, 0.95),
         "es_95": expected_shortfall(both, 0.95),
+        # today's regime-aware VaR (latest EWMA vol), next to the full-sample ones
+        "ewma_var_95": ewma_var(both, 0.95),
         "var_99": hist_var(both, 0.99),
         "max_drawdown": both.apply(max_drawdown),
         "skew": both.skew(),

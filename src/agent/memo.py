@@ -424,6 +424,14 @@ def _template_memo(ctx: dict) -> str:
     anomaly_dates = ", ".join(ctx["anomalies"]["agreed_dates"][-6:]) or "none"
     worst = max(ctx["stress"], key=lambda k: ctx["stress"][k]["var_95"])
 
+    # today's regime-aware VaR vs the full-sample one — .get() so the minimal
+    # hermetic test context (no ewma column) still renders.
+    ewma_v = port.get("ewma_var_95")
+    ewma_clause = (
+        f" Today's regime-aware EWMA VaR95 is {ewma_v:.2%}, versus the full-sample "
+        f"{port['var_95']:.2%} — the live read on whether risk is currently "
+        f"elevated." if ewma_v is not None else "")
+
     factor = ctx.get("factor_model")
     factor_line = (
         f"A Fama-French 5+momentum regression explains R²={factor['r2']:.0%} of "
@@ -480,7 +488,7 @@ historical drawdown {port['max_drawdown']:.1%}.
 ## 2. Market Risk & Factor Exposure
 Portfolio vol is below every single constituent — diversification is working.
 Systemic risk concentrates in the highest-centrality names in the correlation
-network; the tech cluster moves as one block. {factor_line}
+network; the tech cluster moves as one block.{ewma_clause} {factor_line}
 
 ## 3. Anomalies
 Both detectors (IsolationForest + autoencoder) currently agree on
