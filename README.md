@@ -3,10 +3,10 @@
 *A junior quant risk analyst, automated — across both the markets desk and the accounting desk.*
 
 ![Python](https://img.shields.io/badge/python-3.11+-00E5A0?logo=python&logoColor=white&labelColor=0B0E14)
-![Tests](https://img.shields.io/badge/tests-80%20passing-00E5A0?labelColor=0B0E14)
-![FastAPI](https://img.shields.io/badge/API-10%20endpoints-00E5A0?logo=fastapi&logoColor=white&labelColor=0B0E14)
+![Tests](https://img.shields.io/badge/tests-120%20passing-00E5A0?labelColor=0B0E14)
+![FastAPI](https://img.shields.io/badge/API-16%20endpoints-00E5A0?logo=fastapi&logoColor=white&labelColor=0B0E14)
 ![PyTorch](https://img.shields.io/badge/ML-PyTorch%20%2B%20sklearn-00E5A0?logo=pytorch&logoColor=white&labelColor=0B0E14)
-![Streamlit](https://img.shields.io/badge/dashboard-10%20tabs-00E5A0?logo=streamlit&logoColor=white&labelColor=0B0E14)
+![Streamlit](https://img.shields.io/badge/dashboard-12%20tabs-00E5A0?logo=streamlit&logoColor=white&labelColor=0B0E14)
 
 **[Showcase site →](https://sentinel-eight-xi.vercel.app)** · **[Live dashboard →](https://sentinel-risk.streamlit.app)**
 
@@ -22,6 +22,15 @@ autoencoder + IsolationForest); maps systemic risk as a correlation network;
 runs macro stress tests; and uses an **LLM agent** with tool access to the whole
 engine to write the analyst risk memo — served via a **FastAPI** REST API, a
 **Docker** container, and a **Streamlit** dashboard.
+
+It goes beyond measurement into **decisions**: a **supervised stress-day
+classifier** (logistic regression + random forest) predicts drawdowns and, in a
+fully **walk-forward backtest**, gates the portfolio's allocation; **semi-supervised
+label propagation** surfaces the anomaly near-misses two detectors disagreed on;
+**KNN analog days** retrieve what historically followed markets like today; and
+**PCA / KMeans** plus **Marchenko-Pastur covariance denoising** clean the
+optimizer's inputs. Every technique is tied to a real, verified result rather
+than shown for its own sake.
 
 ---
 
@@ -249,11 +258,11 @@ efficiency ratios, DuPont ROE decomposition, Altman Z-score, Piotroski F-score,
 Beneish M-score, accruals ratio, and Benford's Law.
 
 **How does the AI agent work?**
-Genuine tool use, not pasted numbers: a Claude model is given nine callable tools
-over the engine (risk summary, anomalies, network, stress, fundamentals, forensic
-scores, factor model, portfolio optimization) and decides which to call. Without
-an API key it degrades to a deterministic template memo, so the whole system runs
-offline.
+Genuine tool use, not pasted numbers: a Claude model is given twelve callable
+tools over the engine (risk summary, anomalies, network, stress, fundamentals,
+forensic scores, factor model, portfolio optimization, distance-to-default,
+analog days, tactical backtest) and decides which to call. Without an API key it
+degrades to a deterministic template memo, so the whole system runs offline.
 
 **What is the Altman Z-score, and how does Sentinel use it?**
 The Altman Z-score is a bankruptcy-risk model combining five financial ratios;
@@ -295,6 +304,50 @@ risk (the efficient frontier) and three optimal portfolios — minimum-variance,
 maximum-Sharpe (tangency), and risk-parity — versus the equal-weight baseline,
 long-only and fully invested.
 
+**Does Sentinel use machine learning to actually make decisions, or just to
+describe data?**
+Both, but the emphasis is on decisions. The **supervised stress-day classifier**
+labels each day by whether a >5% drawdown follows within a month, trains a
+logistic-regression and random-forest on volatility/drawdown/momentum features,
+and is evaluated out-of-sample with a chronological split, time-series
+cross-validation and ROC-AUC. That prediction then drives a **walk-forward
+tactical backtest**: at every monthly rebalance the model is retrained on
+history-to-date and, when stress probability is high, the portfolio is switched
+into the minimum-variance allocation. The honest, two-sided finding — gating a
+concentrated max-Sharpe book cuts its worst drawdown from −42% to −28%, while
+gating an already-diversified 1/N book does not help (the classic "1/N is hard
+to beat" result) — is reported as-is.
+
+**What is the semi-supervised anomaly detection in Sentinel?**
+Beyond the unsupervised IsolationForest + autoencoder detectors, Sentinel runs
+**label propagation** (scikit-learn LabelSpreading over a K-nearest-neighbours
+graph of trading days), seeded with the high-conviction days both detectors
+agreed on. It spreads those labels through feature space to surface *near-miss*
+days — ones that look just like confirmed anomalies but slipped under a
+detector's threshold — most usefully the days where the two detectors disagreed.
+
+**What are "analog days"?**
+A K-nearest-neighbours retrieval of the historical trading days most similar to
+today (by the same volatility/drawdown/momentum features the classifier uses),
+each paired with the market return that actually followed. It answers, without
+any distributional assumption, "when markets last looked like this, what
+happened next?" — and is exposed as an agent tool.
+
+**What is covariance denoising / Marchenko-Pastur, and why does it matter?**
+A sample covariance matrix estimated from limited history carries measurement
+noise with a known random-matrix spectrum. Sentinel keeps only the eigenvalues
+above the Marchenko-Pastur cutoff (signal: the market and sector factors) and
+flattens the rest, then feeds the cleaned matrix to the Markowitz optimizer.
+Out-of-sample, minimum-variance weights built on the denoised covariance realize
+lower volatility than those built on the raw estimate.
+
+**Which machine-learning techniques does Sentinel demonstrate?**
+Supervised learning (logistic regression, random-forest ensemble, optional
+gradient boosting), unsupervised learning (IsolationForest, PCA, KMeans),
+semi-supervised learning (label propagation), deep learning (a PyTorch
+autoencoder), and instance-based learning (KNN analog retrieval) — each applied
+to a concrete quantitative-finance task rather than a toy dataset.
+
 **How is tail risk measured?**
 Three ways: historical VaR (empirical quantile), Cornish-Fisher modified VaR
 (adjusted for skewness and excess kurtosis), and Expected Shortfall (mean loss
@@ -318,7 +371,11 @@ factor model · factor-adjusted alpha · Markowitz portfolio optimization ·
 efficient frontier · CAPM · Sharpe ratio · forensic accounting · Altman Z-score ·
 Beneish M-score · Piotroski F-score · Benford's Law · DuPont analysis · financial
 statement analysis · SEC EDGAR · machine learning anomaly detection · autoencoder
-· LLM agent · tool use · Python · FastAPI · Streamlit.
+· supervised classification · logistic regression · random forest · gradient
+boosting · semi-supervised learning · label propagation · PCA · KMeans clustering
+· Marchenko-Pastur covariance denoising · KNN analog days · walk-forward backtest
+· tactical asset allocation · regime detection · Merton distance-to-default · LLM
+agent · tool use · Python · FastAPI · Streamlit.
 
 ## Tech stack
 
