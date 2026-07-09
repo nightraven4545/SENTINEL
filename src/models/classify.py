@@ -73,15 +73,14 @@ def _forward_stress_label(port: pd.Series) -> pd.Series:
     return pd.Series(labels, index=port.index, name="stress")
 
 
-def build_dataset(returns: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
-    """Feature matrix X and forward-stress label y for the equal-weight portfolio.
+def build_features(returns: pd.DataFrame) -> pd.DataFrame:
+    """The six market-state features, all known by the close of day t.
 
-    All six features are known by the close of day t; the label looks forward.
-    The tail STRESS_FWD_DAYS rows (whose forward window runs off the data) are
-    dropped so no half-observed label is ever trained on.
+    Shared by the classifier, the walk-forward tactical backtest and the
+    analog-days search — one definition of "what today looks like".
     """
     port = portfolio_returns(returns)
-    feats = pd.DataFrame({
+    return pd.DataFrame({
         # yesterday's shock, today's regime
         "ret_1d": port,
         "vol_21": rolling_vol(port, ROLLING_WINDOW),
@@ -93,7 +92,26 @@ def build_dataset(returns: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
         # cross-sectional dispersion: wide spread across names precedes trouble
         "dispersion": returns.std(axis=1),
     })
-    y = _forward_stress_label(port)
+
+
+def logit_pipeline():
+    """Standardized L2-logistic classifier — scale matters for a penalized
+    linear model. One factory so the backtest trains the exact same model."""
+    return make_pipeline(
+        StandardScaler(),
+        LogisticRegression(C=1.0, max_iter=1000,
+                           class_weight="balanced", random_state=RANDOM_STATE))
+
+
+def build_dataset(returns: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
+    """Feature matrix X and forward-stress label y for the equal-weight portfolio.
+
+    All six features are known by the close of day t; the label looks forward.
+    The tail STRESS_FWD_DAYS rows (whose forward window runs off the data) are
+    dropped so no half-observed label is ever trained on.
+    """
+    feats = build_features(returns)
+    y = _forward_stress_label(portfolio_returns(returns))
     data = feats.join(y).dropna()
     # drop the tail whose forward horizon is incomplete (label is all-zero there)
     data = data.iloc[:-STRESS_FWD_DAYS] if len(data) > STRESS_FWD_DAYS else data
@@ -153,10 +171,7 @@ def train_stress_classifier(returns: pd.DataFrame) -> dict:
 
     # C controls the L2 strength (smaller C = stronger regularization); L2 is
     # sklearn's default penalty, so we set C rather than the deprecated `penalty` kwarg.
-    logit = make_pipeline(
-        StandardScaler(),
-        LogisticRegression(C=1.0, max_iter=1000,
-                           class_weight="balanced", random_state=RANDOM_STATE))
+    logit = logit_pipeline()
     forest = RandomForestClassifier(
         n_estimators=300, max_depth=5, class_weight="balanced",
         random_state=RANDOM_STATE, n_jobs=-1)

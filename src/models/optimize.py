@@ -50,9 +50,14 @@ def _minimize(objective, n: int, extra_constraints=()) -> np.ndarray:
     return res.x
 
 
-def min_variance(returns: pd.DataFrame) -> pd.Series:
-    """Weights that minimise portfolio variance (wᵀΣw)."""
-    _, cov = annualized_moments(returns)
+def min_variance(returns: pd.DataFrame, cov: pd.DataFrame | None = None) -> pd.Series:
+    """Weights that minimise portfolio variance (wᵀΣw).
+
+    Pass `cov` to optimise over an alternative covariance estimate (e.g. the
+    PCA-denoised matrix from unsupervised.py) instead of the sample one.
+    """
+    if cov is None:
+        _, cov = annualized_moments(returns)
     C = cov.to_numpy()
     w = _minimize(lambda w: w @ C @ w, C.shape[0])
     return pd.Series(w, index=returns.columns, name="min_variance")

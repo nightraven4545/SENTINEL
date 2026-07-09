@@ -11,6 +11,9 @@ Endpoints:
   GET  /credit        Merton distance-to-default per name (structural credit)
   GET  /classify      supervised stress-day classifier (logistic + random forest)
   GET  /clusters      PCA statistical factors + KMeans peer clusters
+  GET  /tactical      walk-forward backtest: the classifier gates the allocation
+  GET  /analogs       k-nearest historical days to today + what followed
+  GET  /candidates    semi-supervised near-miss anomaly days (label propagation)
   POST /ask           the agent answers a free-text question (tool-use)
   GET  /memo          generate the risk memo (LLM or template fallback)
   GET  /health        liveness probe (used by Docker healthcheck)
@@ -150,6 +153,10 @@ class FactorResponse(BaseModel):
 class AllocationResponse(BaseModel):
     stats: dict[str, dict] = Field(description="return/vol/Sharpe per portfolio")
     weights: dict[str, dict] = Field(description="Per portfolio: ticker weights")
+    denoising: dict | None = Field(
+        default=None,
+        description="Marchenko-Pastur covariance-denoising check: realized "
+        "out-of-sample vol of raw vs denoised min-variance weights")
 
 
 class CreditResponse(BaseModel):
@@ -174,6 +181,37 @@ class ClassifyResponse(BaseModel):
 class ClusterResponse(BaseModel):
     pca: dict = Field(description="Explained-variance ratios, cumulative, per-name loadings")
     kmeans: dict = Field(description="Best k, silhouette, per-ticker cluster labels")
+
+
+class TacticalResponse(BaseModel):
+    test_start: str
+    test_days: int
+    n_rebalances: int
+    pct_defensive: float = Field(description="Share of days the gate held min-variance")
+    gate: float
+    cost_bps: float
+    stats: dict[str, dict] = Field(
+        description="Per book (tactical/aggressive/1-N): ann return, vol, "
+        "Sharpe, max drawdown, Calmar — all out-of-sample")
+    equity: dict[str, dict] = Field(description="Cumulative wealth per book, by date")
+    rebalance_log: dict[str, dict] = Field(
+        description="Per rebalance date: P(stress) and the regime chosen")
+
+
+class AnalogResponse(BaseModel):
+    query_date: str
+    k: int
+    summary: dict = Field(description="Forward-month distribution of the analogs")
+    analogs: dict[str, dict] = Field(
+        description="Per analog date: similarity distance, realised fwd 5d/21d return")
+
+
+class CandidatesResponse(BaseModel):
+    n_confirmed: int = Field(description="Both-detector anomaly seeds")
+    n_candidates: int
+    candidates: dict[str, dict] = Field(
+        description="Near-miss days: propagated anomaly probability + which "
+        "single detector (if any) fired")
 
 
 # ---------------------------------------------------------------- endpoints
@@ -266,9 +304,16 @@ def get_allocation() -> AllocationResponse:
     try:
         from src.models.optimize import compare_portfolios
         stats, weights = compare_portfolios(_returns())
+        try:  # optional extra: the denoising sanity check may fail independently
+            from src.models.unsupervised import denoising_backtest
+            dn = denoising_backtest(_returns())
+            denoising = {"realized_vol": dn["realized_vol"], **dn["info"]}
+        except Exception:
+            denoising = None
         return AllocationResponse(
             stats=json.loads(stats.to_json(orient="index")),
-            weights=json.loads(weights.to_json()))
+            weights=json.loads(weights.to_json()),
+            denoising=denoising)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Optimization unavailable: {exc}")
 
@@ -315,6 +360,57 @@ def get_clusters() -> ClusterResponse:
             kmeans=cluster_universe(r))
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Clustering unavailable: {exc}")
+
+
+@lru_cache(maxsize=1)
+def _tactical() -> dict:
+    # ~1-2 min cold (two walk-forward loops), then cached for the process
+    from src.models.tactical import compare_overlays
+    return compare_overlays(_returns())
+
+
+@app.get("/tactical", response_model=TacticalResponse)
+def get_tactical() -> TacticalResponse:
+    try:
+        out = _tactical()
+        return TacticalResponse(
+            test_start=out["test_start"], test_days=out["test_days"],
+            n_rebalances=out["n_rebalances"], pct_defensive=out["pct_defensive"],
+            gate=out["gate"], cost_bps=out["cost_bps"],
+            stats=json.loads(out["stats"].to_json(orient="index")),
+            equity=json.loads(out["equity"].round(4).to_json()),
+            rebalance_log=json.loads(out["rebalance_log"].to_json(orient="index")))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Backtest unavailable: {exc}")
+
+
+@app.get("/analogs", response_model=AnalogResponse)
+def get_analogs() -> AnalogResponse:
+    try:
+        from src.models.analogs import analog_days
+        out = analog_days(_returns())
+        return AnalogResponse(
+            query_date=out["query_date"], k=out["k"], summary=out["summary"],
+            analogs=json.loads(out["analogs"].to_json(orient="index")))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Analogs unavailable: {exc}")
+
+
+@app.get("/candidates", response_model=CandidatesResponse)
+def get_candidates() -> CandidatesResponse:
+    try:
+        from src.models.semisup import propagate_labels
+        out = propagate_labels(_returns(), _anomalies())
+        cands = (out[out["candidate"]]
+                 .sort_values("anomaly_prob", ascending=False)
+                 [["anomaly_prob", "if_flag", "ae_flag"]])
+        cands = cands.set_axis(cands.index.strftime("%Y-%m-%d"))  # not epoch-ms keys
+        return CandidatesResponse(
+            n_confirmed=int(out["both_flag"].sum()),
+            n_candidates=int(len(cands)),
+            candidates=json.loads(cands.to_json(orient="index")))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Candidates unavailable: {exc}")
 
 
 @app.post("/ask", response_model=AskResponse)

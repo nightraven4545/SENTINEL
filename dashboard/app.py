@@ -114,7 +114,7 @@ from src.models import risk  # noqa: E402  (after sys.path fix)
 port = risk.portfolio_returns(returns)
 tabs = st.tabs(["Overview", "Deep Dive", "Anomalies", "Network", "Stress Test",
                 "Fundamentals", "Forensic", "Factors", "Allocation", "ML Models",
-                "Ask the Agent"])
+                "Tactical", "Ask the Agent"])
 
 
 @st.cache_data(show_spinner="Loading benchmark…")
@@ -229,6 +229,46 @@ def load_clusters():
     try:
         from src.models.unsupervised import cluster_universe, pca_factors
         return {"pca": pca_factors(returns), "km": cluster_universe(returns)}
+    except Exception:
+        return None
+
+
+@st.cache_data(show_spinner="Running the walk-forward backtest (1-2 min cold)…")
+def load_tactical():
+    """Both tactical-overlay variants, walk-forward. None on failure."""
+    try:
+        from src.models.tactical import compare_overlays
+        return compare_overlays(returns)
+    except Exception:
+        return None
+
+
+@st.cache_data(show_spinner="Searching for analog days…")
+def load_analogs():
+    """K nearest historical days to the latest one. None on failure."""
+    try:
+        from src.models.analogs import analog_days
+        return analog_days(returns)
+    except Exception:
+        return None
+
+
+@st.cache_data(show_spinner="Propagating anomaly labels…")
+def load_semisup():
+    """Semi-supervised near-miss candidates. None on failure."""
+    try:
+        from src.models.semisup import propagate_labels
+        return propagate_labels(returns, load_anomalies())
+    except Exception:
+        return None
+
+
+@st.cache_data(show_spinner="Denoising the covariance matrix…")
+def load_denoise():
+    """Marchenko-Pastur denoising + its out-of-sample check. None on failure."""
+    try:
+        from src.models.unsupervised import denoising_backtest
+        return denoising_backtest(returns)
     except Exception:
         return None
 
@@ -401,6 +441,27 @@ with tabs[2]:
                "rolling vol. Mint = both models agree (high conviction).")
     flagged = anoms[anoms["if_flag"] | anoms["ae_flag"]].sort_index(ascending=False)
     st.dataframe(flagged.round(4), width="stretch", height=320)
+
+    # --- semi-supervised near-misses -----------------------------------------
+    st.divider()
+    st.subheader("Semi-supervised — the near-misses")
+    ss = load_semisup()
+    if ss is None:
+        st.warning("Label propagation unavailable.")
+    else:
+        cands = (ss[ss["candidate"]]
+                 .sort_values("anomaly_prob", ascending=False)
+                 [["anomaly_prob", "if_flag", "ae_flag"]])
+        n_seed = int(ss["both_flag"].sum())
+        st.caption(f"Label propagation (LabelSpreading, KNN graph) spreads the "
+                   f"{n_seed} confirmed anomaly labels through feature space and "
+                   f"asks which OTHER days look just like them. These "
+                   f"{len(cands)} days score at least as anomalous as the "
+                   f"weakest confirmed event but were never confirmed — mostly "
+                   f"days where the two detectors *disagreed* and the "
+                   f"propagation sides with the flag.")
+        st.dataframe(cands.head(15).style.format({"anomaly_prob": "{:.2%}"}),
+                     width="stretch")
 
 
 # ---------------------------------------------------------------- Network
@@ -812,6 +873,46 @@ with tabs[8]:
                    "Risk-parity equalises each name's risk share (ties back to the "
                    "Euler decomposition in Deep Dive).")
 
+    # --- covariance denoising -------------------------------------------------
+    st.divider()
+    st.subheader("Cleaner inputs — Marchenko-Pastur covariance denoising")
+    dn = load_denoise()
+    if dn is None:
+        st.warning("Denoising check unavailable.")
+    else:
+        info = dn["info"]
+        left, right = st.columns(2, gap="large")
+        with left:
+            evals = info["eigenvalues"]
+            colors = [MINT if v > info["mp_cutoff"] else MUTED for v in evals]
+            fig = go.Figure(go.Bar(x=[f"λ{i + 1}" for i in range(len(evals))],
+                                   y=evals, marker_color=colors))
+            fig.add_hline(y=info["mp_cutoff"], line=dict(color=AMBER, dash="dash"),
+                          annotation_text="Marchenko-Pastur cutoff",
+                          annotation_font_color=AMBER)
+            fig.update_layout(title="Correlation eigenvalues — signal vs noise")
+            st.plotly_chart(themed(fig, 360), width="stretch")
+            st.caption(f"Only {info['n_signal']} of {info['n_assets']} eigenvalues "
+                       "clear the random-matrix cutoff — the market and one sector "
+                       "block are signal; the rest is estimation noise Markowitz "
+                       "would happily lever up.")
+        with right:
+            rv = dn["realized_vol"]
+            names = {"raw_min_variance": "Min-var (raw Σ)",
+                     "denoised_min_variance": "Min-var (denoised Σ)",
+                     "equal_weight": "Equal-weight"}
+            fig = go.Figure(go.Bar(
+                x=[names[k] for k in rv], y=list(rv.values()),
+                marker_color=[MUTED, MINT, BORDER],
+                text=[f"{v:.2%}" for v in rv.values()], textposition="outside",
+                textfont=dict(color=TEXT)))
+            fig.update_layout(title="Out-of-sample realized volatility",
+                              yaxis_tickformat=".1%")
+            st.plotly_chart(themed(fig, 360), width="stretch")
+            st.caption(f"Weights estimated on the first {dn['est_days']} days, "
+                       f"volatility realized on the unseen next {dn['test_days']} — "
+                       "the denoised covariance delivers the lower risk it promised.")
+
 
 # ---------------------------------------------------------------- ML Models
 
@@ -929,9 +1030,114 @@ with tabs[9]:
                        "finds — two unsupervised methods agreeing is the signal.")
 
 
-# ---------------------------------------------------------------- Ask the Agent
+# ---------------------------------------------------------------- Tactical
 
 with tabs[10]:
+    st.caption("Decision lens — the stress classifier finally *acts*. At every "
+               "monthly rebalance it is retrained on all history to date; if "
+               "P(stress) clears the gate the book steps into min-variance, "
+               "otherwise it holds the aggressive book. Fully walk-forward: "
+               "nothing at any rebalance sees a single day of the future.")
+    bt = load_tactical()
+    if bt is None:
+        st.warning("Backtest unavailable — returns could not be loaded.")
+    else:
+        s = bt["stats"]
+        tms, ams = s.loc["tactical_max_sharpe"], s.loc["always_max_sharpe"]
+        teq, eq = s.loc["tactical_equal_weight"], s.loc["equal_weight"]
+
+        c = st.columns(4)
+        kpi(c[0], "Max drawdown, gated", f"{tms['max_drawdown']:.0%}",
+            f"vs {ams['max_drawdown']:.0%} ungated max-Sharpe", "up")
+        kpi(c[1], "Calmar, gated", f"{tms['calmar']:.2f}",
+            f"vs {ams['calmar']:.2f} ungated", "up")
+        kpi(c[2], "Defensive regime", f"{bt['pct_defensive']:.0%}",
+            f"of {bt['test_days']} OOS days", "flat")
+        kpi(c[3], "1/N verdict", f"{eq['sharpe']:.2f} Sharpe",
+            f"gated 1/N only {teq['sharpe']:.2f} — 1/N is hard to beat", "down")
+
+        st.write("")
+        pcolor = {"tactical_max_sharpe": MINT, "always_max_sharpe": AMBER,
+                  "tactical_equal_weight": "#58A6FF", "equal_weight": MUTED}
+        fig = go.Figure()
+        # shade the defensive stretches so the regime is visible behind the curves
+        reg = bt["regime"]
+        runs = (reg != reg.shift()).cumsum()
+        for _, seg in reg.groupby(runs):
+            if seg.iloc[0]:
+                fig.add_vrect(x0=seg.index[0], x1=seg.index[-1],
+                              fillcolor=RED, opacity=0.08, line_width=0)
+        for col in bt["equity"].columns:
+            fig.add_scatter(x=bt["equity"].index, y=bt["equity"][col],
+                            mode="lines", name=col.replace("_", " "),
+                            line=dict(color=pcolor[col],
+                                      width=2 if col.startswith("tactical") else 1.2))
+        fig.update_layout(title="Walk-forward equity curves — shaded = classifier "
+                                "in defensive regime")
+        st.plotly_chart(themed(fig, 440), width="stretch")
+        st.caption("The two-sided finding, reported honestly: gating the fragile "
+                   "max-Sharpe book cuts its worst drawdown by "
+                   f"{abs(ams['max_drawdown'] - tms['max_drawdown']):.0%} and lifts "
+                   "Calmar — an ML risk overlay earns its keep on a concentrated "
+                   "book. Gating the already-diversified 1/N book *subtracts* "
+                   "value — DeMiguel's classic result that 1/N is hard to beat.")
+
+        st.write("")
+        st.dataframe(
+            s.style.format({"ann_return": "{:.1%}", "ann_vol": "{:.1%}",
+                            "sharpe": "{:.2f}", "max_drawdown": "{:.1%}",
+                            "calmar": "{:.2f}"}),
+            width="stretch")
+
+    # --- analog days ----------------------------------------------------------
+    st.divider()
+    st.subheader("Analog days — when did the market last look like today?")
+    ana = load_analogs()
+    if ana is None:
+        st.warning("Analog search unavailable.")
+    else:
+        sm = ana["summary"]
+        c = st.columns(4)
+        dirn = "up" if sm["median_fwd_21d"] > 0 else "down"
+        kpi(c[0], "Median forward month", f"{sm['median_fwd_21d']:+.1%}",
+            f"across {ana['k']} analogs", dirn)
+        kpi(c[1], "Bad case (p10)", f"{sm['p10_fwd_21d']:+.1%}", "", "flat")
+        kpi(c[2], "Good case (p90)", f"{sm['p90_fwd_21d']:+.1%}", "", "flat")
+        kpi(c[3], "Ended down", f"{sm['pct_negative']:.0%}",
+            "of the analog months", "flat")
+
+        left, right = st.columns([3, 2], gap="large")
+        with left:
+            fig = go.Figure()
+            for d, path in ana["paths"].items():
+                fig.add_scatter(x=list(range(1, len(path) + 1)), y=path,
+                                mode="lines", name=d, showlegend=False,
+                                line=dict(color=MUTED, width=0.8), opacity=0.45)
+            med = pd.DataFrame(ana["paths"]).median(axis=1)
+            fig.add_scatter(x=list(range(1, len(med) + 1)), y=med, mode="lines",
+                            name="median analog path",
+                            line=dict(color=MINT, width=2.5))
+            fig.add_hline(y=0, line=dict(color=BORDER, width=1))
+            fig.update_layout(title=f"What followed the {ana['k']} days most "
+                                    f"similar to {ana['query_date']}",
+                              xaxis_title="trading days forward",
+                              yaxis_tickformat=".1%")
+            st.plotly_chart(themed(fig, 400), width="stretch")
+            st.caption("KNN over the same six market-state features the stress "
+                       "classifier uses. Each grey line is one analog's realised "
+                       "forward month — an empirical, assumption-free fan of "
+                       "outcomes for days like today.")
+        with right:
+            st.dataframe(
+                ana["analogs"].style.format({"distance": "{:.2f}",
+                                             "fwd_5d": "{:+.1%}",
+                                             "fwd_21d": "{:+.1%}"}),
+                width="stretch", height=400)
+
+
+# ---------------------------------------------------------------- Ask the Agent
+
+with tabs[11]:
     from src.agent import memo as agent
 
     llm_ready = agent._client() is not None

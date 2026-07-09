@@ -14,6 +14,7 @@ def synthetic_data(monkeypatch):
                       index=pd.bdate_range("2024-01-01", periods=300))
     monkeypatch.setattr(api, "_returns", lambda: df)
     api._anomalies.cache_clear()
+    api._tactical.cache_clear()
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
 
@@ -137,6 +138,60 @@ def test_clusters_endpoint(client, monkeypatch):
     body = client.get("/clusters").json()
     assert body["kmeans"]["k"] == 2 and body["kmeans"]["labels"]["B"] == 1
     assert body["pca"]["loadings"]["A"]["PC1"] == pytest.approx(0.3)
+
+
+def test_tactical_endpoint(client, monkeypatch):
+    # patch the walk-forward engine (lazily imported) -> hermetic wrapper test
+    import src.models.tactical as tac
+    idx = pd.bdate_range("2025-01-01", periods=3)
+    daily = pd.DataFrame({"tactical_max_sharpe": [0.01, -0.02, 0.005],
+                          "always_max_sharpe": [0.02, -0.03, 0.004],
+                          "equal_weight": [0.01, -0.01, 0.002]}, index=idx)
+    canned = {"test_start": "2025-01-01", "test_days": 3, "n_rebalances": 1,
+              "pct_defensive": 0.4, "gate": 0.5, "cost_bps": 5,
+              "stats": pd.DataFrame({"sharpe": {"tactical_max_sharpe": 1.0}}),
+              "equity": (1 + daily).cumprod(),
+              "rebalance_log": pd.DataFrame(
+                  {"p_stress": [0.6], "defensive": [True]},
+                  index=pd.Index(idx[:1], name="date"))}
+    monkeypatch.setattr(tac, "compare_overlays", lambda r: canned)
+    body = client.get("/tactical").json()
+    assert body["pct_defensive"] == pytest.approx(0.4)
+    assert body["stats"]["tactical_max_sharpe"]["sharpe"] == pytest.approx(1.0)
+    assert len(body["equity"]["tactical_max_sharpe"]) == 3
+
+
+def test_analogs_endpoint(client, monkeypatch):
+    import src.models.analogs as an
+    canned = {"query_date": "2025-06-30", "k": 2,
+              "summary": {"median_fwd_21d": 0.01, "pct_negative": 0.5},
+              "analogs": pd.DataFrame(
+                  {"distance": [0.1, 0.2], "fwd_5d": [0.01, -0.02],
+                   "fwd_21d": [0.03, -0.04]},
+                  index=pd.Index(pd.to_datetime(["2020-01-02", "2021-05-04"]),
+                                 name="date")),
+              "paths": {}}
+    monkeypatch.setattr(an, "analog_days", lambda r: canned)
+    body = client.get("/analogs").json()
+    assert body["k"] == 2 and body["summary"]["median_fwd_21d"] == pytest.approx(0.01)
+    assert len(body["analogs"]) == 2
+
+
+def test_candidates_endpoint(client, monkeypatch):
+    import src.models.semisup as ss
+    idx = pd.to_datetime(["2024-02-01", "2024-03-01", "2024-04-01"])
+    out = pd.DataFrame({"anomaly_prob": [0.9, 0.2, 0.95],
+                        "if_flag": [True, False, False],
+                        "ae_flag": [False, False, False],
+                        "both_flag": [False, False, False],
+                        "candidate": [True, False, True]}, index=idx)
+    monkeypatch.setattr(ss, "propagate_labels", lambda r, a: out)
+    body = client.get("/candidates").json()
+    assert body["n_candidates"] == 2
+    # ranked: the 0.95 day first, keyed by readable date
+    assert list(body["candidates"])[0] == "2024-04-01"
+    probs = [c["anomaly_prob"] for c in body["candidates"].values()]
+    assert probs == sorted(probs, reverse=True)
 
 
 def test_ask_without_llm_returns_answer(client):

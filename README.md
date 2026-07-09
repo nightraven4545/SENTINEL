@@ -34,10 +34,11 @@ engine to write the analyst risk memo — served via a **FastAPI** REST API, a
 | **Data (all free, no paid keys)** | [yfinance](https://github.com/ranaroussi/yfinance) prices · [SEC EDGAR](https://www.sec.gov/edgar) 10-K XBRL · [Ken French](https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/data_library.html) factor library |
 | **Risk models** | Historical + Cornish-Fisher VaR, Expected Shortfall, Sharpe/Sortino/Calmar, CAPM, Fama-French 5+momentum, Euler risk decomposition, Kupiec backtest, Markowitz efficient frontier |
 | **Accounting models** | Liquidity/solvency/profitability ratios, DuPont ROE, Altman Z, Piotroski F, Beneish M, accruals, Benford's Law |
-| **ML** | IsolationForest + PyTorch autoencoder anomaly detection · supervised stress-day classifier (logistic + random forest) · PCA + KMeans structure |
-| **Agent** | Claude (`claude-opus-4-8`) with 9 tools over the engine; deterministic template fallback with no API key |
-| **Surfaces** | 13 REST endpoints · 11-tab Streamlit terminal · Next.js showcase site |
-| **Tested** | 107 pytest cases, known-input & closed-form oracles, no network needed |
+| **ML** | IsolationForest + PyTorch autoencoder anomaly detection · supervised stress-day classifier (logistic + random forest) · semi-supervised label propagation · PCA + KMeans + Marchenko-Pastur denoising · KNN analog days |
+| **Decision layer** | Walk-forward tactical backtest — the classifier gates the allocation (max-Sharpe book: max drawdown -42% → -28%); denoised covariance lowers realized out-of-sample vol |
+| **Agent** | Claude (`claude-opus-4-8`) with 12 tools over the engine; deterministic template fallback with no API key |
+| **Surfaces** | 16 REST endpoints · 12-tab Streamlit terminal · Next.js showcase site |
+| **Tested** | 120 pytest cases, known-input & closed-form oracles, no network needed |
 | **Stack** | Python · pandas · NumPy · SciPy · scikit-learn · PyTorch · NetworkX · DuckDB · FastAPI · Docker · Streamlit · Plotly · Next.js |
 
 ## Applied coursework
@@ -45,8 +46,14 @@ engine to write the analyst risk memo — served via a **FastAPI** REST API, a
 Sentinel doubles as the applied capstone for the [IITG.ai](https://iitgai.in)
 "ML.AI" summer course on Data Science & Machine Learning.
 [`docs/COURSE_MAPPING.md`](docs/COURSE_MAPPING.md) maps every week — supervised
-regression & classification, PCA, clustering, ensembles, neural networks — to
-the Sentinel module that puts it to work on a real quant problem.
+regression & classification, PCA, clustering, ensembles, semi-supervised
+learning, neural networks — to the Sentinel module that puts it to work, then
+closes the loop in a **decision layer**: the stress classifier gates a
+walk-forward allocation (cutting the max-Sharpe book's worst drawdown from
+-42% to -28%), label propagation surfaces the anomaly near-misses the two
+detectors disagreed on, KNN retrieves what followed the days most similar to
+today, and random-matrix denoising hands the optimizer a cleaner covariance
+that realizes lower out-of-sample volatility.
 
 ## The problem
 
@@ -174,12 +181,15 @@ out rather than treating as a verdict.
 | [`src/models/forensic.py`](src/models/forensic.py) | Altman Z, Piotroski F, Beneish M, accruals, Benford's Law forensic screens |
 | [`src/models/anomaly.py`](src/models/anomaly.py) | IsolationForest + autoencoder (20→8→3→8→20) over per-name returns and rolling vol; agreement flag |
 | [`src/models/classify.py`](src/models/classify.py) | Supervised stress-day classifier: L2-logistic + random forest on forward-drawdown labels; chronological split, time-series CV, ROC-AUC / precision / recall |
-| [`src/models/unsupervised.py`](src/models/unsupervised.py) | PCA statistical factors (PC1 ≈ the market) + KMeans peer clustering on correlation profiles; cross-checks the network communities |
+| [`src/models/unsupervised.py`](src/models/unsupervised.py) | PCA statistical factors (PC1 ≈ the market) + KMeans peer clustering on correlation profiles; Marchenko-Pastur covariance denoising with an out-of-sample check |
+| [`src/models/tactical.py`](src/models/tactical.py) | Walk-forward tactical backtest: the stress classifier gates the book between min-variance and the aggressive portfolio; costs, regime log, honest two-sided result |
+| [`src/models/semisup.py`](src/models/semisup.py) | Semi-supervised anomaly hunt: label propagation from confirmed events surfaces the near-miss days the detectors disagreed on |
+| [`src/models/analogs.py`](src/models/analogs.py) | KNN analog days: the k most similar historical days to today + the forward month that followed each |
 | [`src/models/graph.py`](src/models/graph.py) | Correlation network, eigenvector centrality, communities, 63-day correlation-shift detector |
 | [`src/models/stress.py`](src/models/stress.py) | Parameterized scenario engine (vol multiplier + drift shocks) replayed over history |
 | [`src/agent/memo.py`](src/agent/memo.py) | Claude agent with 9 tools over the engine; writes the two-lens memo, answers questions; deterministic fallback without a key |
-| [`src/api/main.py`](src/api/main.py) | FastAPI: `/metrics`, `/stress`, `/anomalies`, `/fundamentals`, `/forensic`, `/factors`, `/allocation`, `/credit`, `/classify`, `/clusters`, `/ask`, `/memo`, `/health` |
-| [`dashboard/`](dashboard/app.py) | Streamlit risk terminal — dark, mint-accent, eleven tabs including Forensic, Factors, Allocation, ML Models and "Ask the Agent" |
+| [`src/api/main.py`](src/api/main.py) | FastAPI: `/metrics`, `/stress`, `/anomalies`, `/fundamentals`, `/forensic`, `/factors`, `/allocation`, `/credit`, `/classify`, `/clusters`, `/tactical`, `/analogs`, `/candidates`, `/ask`, `/memo`, `/health` |
+| [`dashboard/`](dashboard/app.py) | Streamlit risk terminal — dark, mint-accent, twelve tabs including Forensic, Factors, Allocation, ML Models, Tactical and "Ask the Agent" |
 | [`site/`](site/) | Next.js + Tailwind + framer-motion showcase page (Vercel) |
 
 ## How to run

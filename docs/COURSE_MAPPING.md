@@ -38,6 +38,36 @@ Both are surfaced in the API (`GET /classify`, `GET /clusters`), the Streamlit
 dashboard (the **ML Models** tab), and pinned by oracle tests in
 [`tests/test_ml.py`](../tests/test_ml.py).
 
+## The decision layer — where the techniques close the loop
+
+Exhibiting a technique is coursework; making it decide something is the job.
+Four follow-ups turn the course toolkit into predict → act → measure loops
+(tests in [`tests/test_decision.py`](../tests/test_decision.py)):
+
+- **[`tactical.py`](../src/models/tactical.py)** (W2+W4 acting) — a fully
+  walk-forward backtest where the stress classifier gates the allocation:
+  retrained at every monthly rebalance on history-to-date, it switches the book
+  into min-variance when P(stress) clears the gate. The two-sided result,
+  reported honestly: gating the concentrated max-Sharpe book cuts its worst
+  drawdown from **-42% to -28%** and lifts Calmar; gating the diversified 1/N
+  book *subtracts* value (DeMiguel's "1/N is hard to beat"). The finding is
+  *where* an ML risk overlay earns its keep, not that one config looked good.
+- **[`semisup.py`](../src/models/semisup.py)** (W4 semi-supervised) —
+  LabelSpreading over the KNN graph of trading days, seeded with the 14
+  both-detector anomalies and the calmest 30% of days. Surfaces **15 near-miss
+  days** (all COVID-aftershock, March-April 2020) that IsolationForest flagged
+  but the autoencoder let through — the propagation adjudicates detector
+  disagreement.
+- **[`analogs.py`](../src/models/analogs.py)** (W3 KNN) — the k days most
+  similar to today (same six features as the classifier), each with the
+  realised forward month that followed: an empirical fan of outcomes for "days
+  like today". Also an agent tool (`get_analog_days`).
+- **`denoised_covariance` in [`unsupervised.py`](../src/models/unsupervised.py)**
+  (W3 PCA, applied) — Marchenko-Pastur random-matrix filtering of the
+  correlation eigenvalues (only 2 of 10 clear the noise cutoff); min-variance
+  weights built on the denoised matrix realize **lower out-of-sample volatility**
+  than raw-covariance weights (13.35% vs 13.63%).
+
 ## Deliberately not forced in
 
 Naïve Bayes, SVM and KNN (W2/W3) are one-line sklearn swaps but weak fits for

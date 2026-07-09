@@ -26,7 +26,8 @@ from sklearn.decomposition import PCA
 from sklearn.metrics import silhouette_score
 from sklearn.preprocessing import StandardScaler
 
-from src.models.risk import annualized_return, annualized_vol, max_drawdown, portfolio_returns
+from src.models.risk import (TRADING_DAYS, annualized_return, annualized_vol,
+                             max_drawdown, portfolio_returns)
 
 # why up to 3: PC1 is the market, PC2/PC3 the leading style rotations — beyond
 # that the components are mostly idiosyncratic noise for a ~10-name book.
@@ -111,6 +112,68 @@ def cluster_universe(returns: pd.DataFrame, k_range=K_RANGE) -> dict:
     }
 
 
+def denoised_covariance(returns: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
+    """Random-matrix (Marchenko-Pastur) denoising of the covariance matrix.
+
+    A sample correlation matrix estimated from T days of N assets carries
+    measurement noise with a KNOWN eigenvalue spectrum: pure noise would put
+    every eigenvalue below lambda+ = (1 + sqrt(N/T))^2 (Marchenko-Pastur).
+    Eigenvalues above the cutoff are signal (market, sectors); the rest are
+    noise the Markowitz optimiser would happily lever up. We keep the signal
+    eigenvalues, flatten the noisy ones to their average (preserving the
+    trace), rebuild the correlation matrix and re-apply the sample vols.
+
+    Returns the annualized denoised covariance plus diagnostics (eigenvalues,
+    the cutoff, how many eigenvalues counted as signal).
+    """
+    clean = returns.dropna()
+    T, N = clean.shape
+    corr = clean.corr()
+    std = clean.std()
+
+    evals, evecs = np.linalg.eigh(corr.to_numpy())   # ascending order
+    mp_cutoff = (1 + np.sqrt(N / T)) ** 2
+    noise = evals < mp_cutoff
+    denoised = evals.copy()
+    if noise.any():
+        denoised[noise] = evals[noise].mean()        # flatten noise, keep trace
+
+    corr_d = evecs @ np.diag(denoised) @ evecs.T
+    d = np.sqrt(np.diag(corr_d))
+    corr_d = corr_d / np.outer(d, d)                 # unit diagonal again
+    cov_d = corr_d * np.outer(std, std) * TRADING_DAYS
+
+    return (pd.DataFrame(cov_d, index=corr.index, columns=corr.columns),
+            {"eigenvalues": [round(float(v), 4) for v in evals[::-1]],
+             "mp_cutoff": round(float(mp_cutoff), 4),
+             "n_signal": int((~noise).sum()), "n_assets": N, "n_obs": T})
+
+
+def denoising_backtest(returns: pd.DataFrame, split: float = 0.5) -> dict:
+    """Does denoising help OUT OF SAMPLE? Estimate min-variance weights on the
+    first part of history with the raw vs denoised covariance, then measure the
+    realized volatility of both books on the unseen second part. Lower realized
+    vol from the denoised weights = the cleaning removed noise, not signal.
+    """
+    from src.models.optimize import min_variance
+    cut = int(len(returns) * split)
+    est, test = returns.iloc[:cut], returns.iloc[cut:]
+
+    cov_d, info = denoised_covariance(est)
+    w_raw = min_variance(est)
+    w_den = min_variance(est, cov=cov_d)
+    w_eq = pd.Series(1.0 / returns.shape[1], index=returns.columns)
+
+    realized = {name: float(annualized_vol(test @ w.reindex(test.columns)))
+                for name, w in
+                (("raw_min_variance", w_raw), ("denoised_min_variance", w_den),
+                 ("equal_weight", w_eq))}
+    return {"realized_vol": {k: round(v, 4) for k, v in realized.items()},
+            "weights": pd.DataFrame({"raw": w_raw, "denoised": w_den}),
+            "info": info,
+            "est_days": int(cut), "test_days": int(len(test))}
+
+
 def compare_to_communities(returns: pd.DataFrame) -> pd.DataFrame:
     """Side-by-side of the KMeans clusters and graph.py's network communities —
     two unsupervised methods on the same universe. Agreement is the finding:
@@ -142,3 +205,10 @@ if __name__ == "__main__":
     print(f"\nKMeans: best k={cl['k']} (silhouette {cl['silhouette']:.3f})")
     print("\nKMeans clusters vs graph communities:")
     print(compare_to_communities(r))
+
+    dn = denoising_backtest(r)
+    print(f"\nDenoising backtest (est {dn['est_days']}d -> test {dn['test_days']}d, "
+          f"{dn['info']['n_signal']}/{dn['info']['n_assets']} signal eigenvalues, "
+          f"MP cutoff {dn['info']['mp_cutoff']}):")
+    for k, v in dn["realized_vol"].items():
+        print(f"  {k:22} realized vol {v:.2%}")

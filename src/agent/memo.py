@@ -247,6 +247,24 @@ def _tool_credit() -> str:
     return dtd.round(4).to_json(orient="index")
 
 
+def _tool_analogs() -> str:
+    from src.models.analogs import analog_days
+    out = analog_days(_returns())
+    a = out["analogs"].set_axis(out["analogs"].index.strftime("%Y-%m-%d"))
+    return json.dumps({"query_date": out["query_date"], "k": out["k"],
+                       "summary": out["summary"],
+                       "analogs": json.loads(a.to_json(orient="index"))})
+
+
+def _tool_tactical() -> str:
+    from src.models.tactical import compare_overlays
+    out = compare_overlays(_returns())
+    return json.dumps({"stats": _json_records(out["stats"]),
+                       "pct_defensive": out["pct_defensive"],
+                       "test_start": out["test_start"],
+                       "test_days": out["test_days"], "gate": out["gate"]})
+
+
 TOOL_FUNCS = {
     "get_risk_summary": lambda inp: _tool_risk_summary(),
     "get_anomalies": lambda inp: _tool_anomalies(int(inp.get("limit", 20))),
@@ -258,6 +276,8 @@ TOOL_FUNCS = {
     "get_factor_model": lambda inp: _tool_factor_model(),
     "get_optimal_portfolios": lambda inp: _tool_optimization(),
     "get_distance_to_default": lambda inp: _tool_credit(),
+    "get_analog_days": lambda inp: _tool_analogs(),
+    "get_tactical_backtest": lambda inp: _tool_tactical(),
 }
 
 TOOLS = [
@@ -341,6 +361,26 @@ TOOLS = [
                        "leverage. The market's read on distress — the companion to "
                        "the accounting-based Altman Z. Banks are excluded (no "
                        "default-point tag).",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "get_analog_days",
+        "description": "The k historical days most similar to TODAY (KNN over "
+                       "vol/drawdown/momentum/dispersion features) with the "
+                       "realised forward-month return that followed each — an "
+                       "empirical answer to 'given days like today, what tended "
+                       "to happen next?'",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "get_tactical_backtest",
+        "description": "Walk-forward backtest where the stress classifier gates "
+                       "the allocation (min-variance when P(stress) is high, the "
+                       "aggressive book otherwise): out-of-sample return/vol/"
+                       "Sharpe/max-drawdown/Calmar for the gated and ungated "
+                       "books. Shows where the ML overlay adds value (the "
+                       "concentrated max-Sharpe book) and where it does not "
+                       "(the diversified 1/N book).",
         "input_schema": {"type": "object", "properties": {}},
     },
 ]
