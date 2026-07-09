@@ -108,6 +108,37 @@ def test_credit_endpoint(client, monkeypatch):
     assert body["distance_to_default"]["B"]["distance_to_default"] == pytest.approx(3.0)
 
 
+def test_classify_endpoint(client, monkeypatch):
+    # patch the classifier (lazily imported in the endpoint) -> hermetic wrapper test
+    import src.models.classify as clf
+    canned = {"features": ["vol_21"], "horizon_days": 21, "threshold": 0.05,
+              "positive_rate": 0.15, "n_train": 100, "n_test": 40,
+              "models": {"logistic": {"roc_auc": 0.71, "cv_auc_mean": 0.55,
+                                      "precision": 0.3, "recall": 0.6,
+                                      "confusion": [[30, 5], [3, 2]],
+                                      "roc_curve": {"fpr": [0.0, 1.0], "tpr": [0.0, 1.0]}}},
+              "feature_importance": {"vol_21": 0.4}, "logistic_coef": {"vol_21": 0.3}}
+    monkeypatch.setattr(clf, "train_stress_classifier", lambda r: canned)
+    body = client.get("/classify").json()
+    assert body["horizon_days"] == 21 and body["positive_rate"] == pytest.approx(0.15)
+    assert body["models"]["logistic"]["roc_auc"] == pytest.approx(0.71)
+
+
+def test_clusters_endpoint(client, monkeypatch):
+    # patch PCA + KMeans (lazily imported) -> hermetic wrapper test
+    import src.models.unsupervised as un
+    pca = {"explained_variance_ratio": [0.4, 0.1], "cumulative_variance": [0.4, 0.5],
+           "loadings": pd.DataFrame({"PC1": {"A": 0.3, "B": 0.4}}),
+           "n_obs": 100, "n_assets": 2}
+    km = {"k": 2, "silhouette": 0.5, "labels": {"A": 0, "B": 1},
+          "silhouette_by_k": {2: 0.5}}
+    monkeypatch.setattr(un, "pca_factors", lambda r: pca)
+    monkeypatch.setattr(un, "cluster_universe", lambda r: km)
+    body = client.get("/clusters").json()
+    assert body["kmeans"]["k"] == 2 and body["kmeans"]["labels"]["B"] == 1
+    assert body["pca"]["loadings"]["A"]["PC1"] == pytest.approx(0.3)
+
+
 def test_ask_without_llm_returns_answer(client):
     body = client.post("/ask", json={"question": "What is the VaR?"}).json()
     assert "ANTHROPIC_API_KEY" in body["answer"]

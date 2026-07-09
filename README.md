@@ -34,11 +34,19 @@ engine to write the analyst risk memo — served via a **FastAPI** REST API, a
 | **Data (all free, no paid keys)** | [yfinance](https://github.com/ranaroussi/yfinance) prices · [SEC EDGAR](https://www.sec.gov/edgar) 10-K XBRL · [Ken French](https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/data_library.html) factor library |
 | **Risk models** | Historical + Cornish-Fisher VaR, Expected Shortfall, Sharpe/Sortino/Calmar, CAPM, Fama-French 5+momentum, Euler risk decomposition, Kupiec backtest, Markowitz efficient frontier |
 | **Accounting models** | Liquidity/solvency/profitability ratios, DuPont ROE, Altman Z, Piotroski F, Beneish M, accruals, Benford's Law |
-| **ML** | IsolationForest + PyTorch autoencoder (agreement = high-conviction anomaly) |
+| **ML** | IsolationForest + PyTorch autoencoder anomaly detection · supervised stress-day classifier (logistic + random forest) · PCA + KMeans structure |
 | **Agent** | Claude (`claude-opus-4-8`) with 9 tools over the engine; deterministic template fallback with no API key |
-| **Surfaces** | 10 REST endpoints · 10-tab Streamlit terminal · Next.js showcase site |
-| **Tested** | 80 pytest cases, known-input & closed-form oracles, no network needed |
+| **Surfaces** | 13 REST endpoints · 11-tab Streamlit terminal · Next.js showcase site |
+| **Tested** | 107 pytest cases, known-input & closed-form oracles, no network needed |
 | **Stack** | Python · pandas · NumPy · SciPy · scikit-learn · PyTorch · NetworkX · DuckDB · FastAPI · Docker · Streamlit · Plotly · Next.js |
+
+## Applied coursework
+
+Sentinel doubles as the applied capstone for the [IITG.ai](https://iitgai.in)
+"ML.AI" summer course on Data Science & Machine Learning.
+[`docs/COURSE_MAPPING.md`](docs/COURSE_MAPPING.md) maps every week — supervised
+regression & classification, PCA, clustering, ensembles, neural networks — to
+the Sentinel module that puts it to work on a real quant problem.
 
 ## The problem
 
@@ -165,11 +173,13 @@ out rather than treating as a verdict.
 | [`src/models/fundamentals.py`](src/models/fundamentals.py) | Financial-statement ratios + 3-step DuPont ROE decomposition |
 | [`src/models/forensic.py`](src/models/forensic.py) | Altman Z, Piotroski F, Beneish M, accruals, Benford's Law forensic screens |
 | [`src/models/anomaly.py`](src/models/anomaly.py) | IsolationForest + autoencoder (20→8→3→8→20) over per-name returns and rolling vol; agreement flag |
+| [`src/models/classify.py`](src/models/classify.py) | Supervised stress-day classifier: L2-logistic + random forest on forward-drawdown labels; chronological split, time-series CV, ROC-AUC / precision / recall |
+| [`src/models/unsupervised.py`](src/models/unsupervised.py) | PCA statistical factors (PC1 ≈ the market) + KMeans peer clustering on correlation profiles; cross-checks the network communities |
 | [`src/models/graph.py`](src/models/graph.py) | Correlation network, eigenvector centrality, communities, 63-day correlation-shift detector |
 | [`src/models/stress.py`](src/models/stress.py) | Parameterized scenario engine (vol multiplier + drift shocks) replayed over history |
 | [`src/agent/memo.py`](src/agent/memo.py) | Claude agent with 9 tools over the engine; writes the two-lens memo, answers questions; deterministic fallback without a key |
-| [`src/api/main.py`](src/api/main.py) | FastAPI: `/metrics`, `/stress`, `/anomalies`, `/fundamentals`, `/forensic`, `/factors`, `/allocation`, `/ask`, `/memo`, `/health` |
-| [`dashboard/`](dashboard/app.py) | Streamlit risk terminal — dark, mint-accent, ten tabs including Fundamentals, Forensic, Factors, Allocation and "Ask the Agent" |
+| [`src/api/main.py`](src/api/main.py) | FastAPI: `/metrics`, `/stress`, `/anomalies`, `/fundamentals`, `/forensic`, `/factors`, `/allocation`, `/credit`, `/classify`, `/clusters`, `/ask`, `/memo`, `/health` |
+| [`dashboard/`](dashboard/app.py) | Streamlit risk terminal — dark, mint-accent, eleven tabs including Forensic, Factors, Allocation, ML Models and "Ask the Agent" |
 | [`site/`](site/) | Next.js + Tailwind + framer-motion showcase page (Vercel) |
 
 ## How to run

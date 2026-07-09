@@ -113,7 +113,8 @@ from src.models import risk  # noqa: E402  (after sys.path fix)
 
 port = risk.portfolio_returns(returns)
 tabs = st.tabs(["Overview", "Deep Dive", "Anomalies", "Network", "Stress Test",
-                "Fundamentals", "Forensic", "Factors", "Allocation", "Ask the Agent"])
+                "Fundamentals", "Forensic", "Factors", "Allocation", "ML Models",
+                "Ask the Agent"])
 
 
 @st.cache_data(show_spinner="Loading benchmark…")
@@ -208,6 +209,26 @@ def load_optimization():
         return {"stats": stats, "weights": weights,
                 "ef": efficient_frontier(returns, 50),
                 "mu": mu, "asset_vol": asset_vol, "rf": RISK_FREE_RATE}
+    except Exception:
+        return None
+
+
+@st.cache_data(show_spinner="Training stress classifier…")
+def load_classifier():
+    """Supervised stress-day classifier (logistic + random forest). None on failure."""
+    try:
+        from src.models.classify import train_stress_classifier
+        return train_stress_classifier(returns)
+    except Exception:
+        return None
+
+
+@st.cache_data(show_spinner="Running PCA + KMeans…")
+def load_clusters():
+    """PCA statistical factors + KMeans peer clusters. None on failure."""
+    try:
+        from src.models.unsupervised import cluster_universe, pca_factors
+        return {"pca": pca_factors(returns), "km": cluster_universe(returns)}
     except Exception:
         return None
 
@@ -792,9 +813,125 @@ with tabs[8]:
                    "Euler decomposition in Deep Dive).")
 
 
-# ---------------------------------------------------------------- Ask the Agent
+# ---------------------------------------------------------------- ML Models
 
 with tabs[9]:
+    st.caption("Course-ML lens — the classical toolkit applied to the book. "
+               "*Supervised* (predict a drawdown before it happens) and "
+               "*unsupervised* (find the market's hidden structure), the "
+               "complement to the deep-learning autoencoder in Anomalies.")
+
+    # --- supervised: stress-day classifier ---------------------------------
+    st.subheader("Supervised — will a drawdown follow?")
+    clf = load_classifier()
+    if clf is None:
+        st.warning("Classifier unavailable — returns could not be loaded.")
+    else:
+        best_name = max(clf["models"], key=lambda m: clf["models"][m]["roc_auc"])
+        best = clf["models"][best_name]
+        c = st.columns(4)
+        kpi(c[0], "Best model ROC-AUC", f"{best['roc_auc']:.2f}",
+            f"{best_name.replace('_', ' ')}, out-of-sample", "up")
+        kpi(c[1], "Time-series CV AUC", f"{best['cv_auc_mean']:.2f}",
+            f"±{best['cv_auc_std']:.2f} across folds", "flat")
+        kpi(c[2], "Stress-day base rate", f"{clf['positive_rate']:.0%}",
+            f">{clf['threshold']:.0%} drop in {clf['horizon_days']}d", "flat")
+        kpi(c[3], "Recall (caught)", f"{best['recall']:.0%}",
+            "of real stress days flagged", "flat")
+
+        st.write("")
+        left, right = st.columns(2, gap="large")
+
+        # ROC curves — both models vs the coin-flip diagonal
+        with left:
+            fig = go.Figure()
+            palette = {"logistic": MINT, "random_forest": AMBER, "xgboost": "#58A6FF"}
+            for name, m in clf["models"].items():
+                fig.add_scatter(x=m["roc_curve"]["fpr"], y=m["roc_curve"]["tpr"],
+                                mode="lines", name=f"{name} ({m['roc_auc']:.2f})",
+                                line=dict(color=palette.get(name, MUTED), width=2))
+            fig.add_scatter(x=[0, 1], y=[0, 1], mode="lines", name="random",
+                            line=dict(color=BORDER, dash="dash", width=1))
+            fig.update_layout(title="ROC curve (out-of-sample)",
+                              xaxis_title="false positive rate",
+                              yaxis_title="true positive rate")
+            st.plotly_chart(themed(fig, 380), width="stretch")
+            st.caption("Above the diagonal = better than chance. The label is "
+                       "forward-looking and the split is chronological, so this is "
+                       "an honest out-of-sample read — no peeking at the future.")
+
+        # feature importance — what precedes drawdowns
+        with right:
+            imp = dict(sorted(clf["feature_importance"].items(),
+                              key=lambda kv: kv[1]))
+            fig = go.Figure(go.Bar(
+                x=list(imp.values()), y=list(imp), orientation="h",
+                marker_color=MINT))
+            fig.update_layout(title="Random-forest feature importance")
+            st.plotly_chart(themed(fig, 380), width="stretch")
+            st.caption("Volatility (rolling and EWMA) dominates — turbulence "
+                       "clusters, so a rough market is the strongest tell that a "
+                       "drawdown is coming.")
+
+    st.divider()
+
+    # --- unsupervised: PCA + KMeans ----------------------------------------
+    st.subheader("Unsupervised — the market's hidden structure")
+    cl = load_clusters()
+    if cl is None:
+        st.warning("PCA/clustering unavailable — returns could not be loaded.")
+    else:
+        pca, km = cl["pca"], cl["km"]
+        c = st.columns(3)
+        kpi(c[0], "PC1 variance", f"{pca['explained_variance_ratio'][0]:.0%}",
+            "one common 'market' factor", "flat")
+        kpi(c[1], "Top-3 PCs", f"{pca['cumulative_variance'][2]:.0%}",
+            "of all co-movement", "flat")
+        kpi(c[2], "KMeans clusters", f"k = {km['k']}",
+            f"silhouette {km['silhouette']:.2f}", "flat")
+
+        st.write("")
+        left, right = st.columns(2, gap="large")
+
+        # PCA scree — variance explained per component
+        with left:
+            evr = pca["explained_variance_ratio"]
+            labels = [f"PC{i + 1}" for i in range(len(evr))]
+            fig = go.Figure()
+            fig.add_bar(x=labels, y=evr, marker_color=MINT, name="individual")
+            fig.add_scatter(x=labels, y=pca["cumulative_variance"], mode="lines+markers",
+                            name="cumulative", line=dict(color=AMBER, width=2))
+            fig.update_layout(title="PCA scree — variance explained",
+                              yaxis_tickformat=".0%")
+            st.plotly_chart(themed(fig, 380), width="stretch")
+            st.caption("PC1 is the market itself (every name loads the same sign); "
+                       "PC2 onward are style rotations. The *statistical* mirror of "
+                       "the *economic* Fama-French factors in the Factors tab.")
+
+        # KMeans clusters on the PC1/PC2 plane
+        with right:
+            load = pca["loadings"]
+            palette = [MINT, AMBER, "#58A6FF", RED, MUTED]
+            fig = go.Figure()
+            for cid in sorted(set(km["labels"].values())):
+                names = [t for t, c_ in km["labels"].items() if c_ == cid]
+                fig.add_scatter(
+                    x=load.loc[names, "PC1"], y=load.loc[names, "PC2"],
+                    mode="markers+text", text=names, textposition="top center",
+                    marker=dict(size=12, color=palette[cid % len(palette)],
+                                line=dict(width=1, color=TEXT)),
+                    textfont=dict(size=10, color=TEXT), name=f"cluster {cid}")
+            fig.update_layout(title="KMeans clusters on the PC1/PC2 plane",
+                              xaxis_title="PC1 loading", yaxis_title="PC2 loading")
+            st.plotly_chart(themed(fig, 380), width="stretch")
+            st.caption("KMeans clusters the names by their correlation profile and "
+                       "recovers the same sector blocks the correlation network "
+                       "finds — two unsupervised methods agreeing is the signal.")
+
+
+# ---------------------------------------------------------------- Ask the Agent
+
+with tabs[10]:
     from src.agent import memo as agent
 
     llm_ready = agent._client() is not None

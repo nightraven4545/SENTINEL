@@ -9,6 +9,8 @@ Endpoints:
   GET  /factors       Fama-French factor loadings + factor-adjusted alpha
   GET  /allocation    optimal portfolios (min-var / max-Sharpe / risk-parity)
   GET  /credit        Merton distance-to-default per name (structural credit)
+  GET  /classify      supervised stress-day classifier (logistic + random forest)
+  GET  /clusters      PCA statistical factors + KMeans peer clusters
   POST /ask           the agent answers a free-text question (tool-use)
   GET  /memo          generate the risk memo (LLM or template fallback)
   GET  /health        liveness probe (used by Docker healthcheck)
@@ -156,6 +158,24 @@ class CreditResponse(BaseModel):
         "default probability, asset value/vol, leverage. Banks excluded.")
 
 
+class ClassifyResponse(BaseModel):
+    horizon_days: int = Field(description="Forward window the label looks over")
+    threshold: float = Field(description="Drawdown that defines a 'stress day'")
+    positive_rate: float = Field(description="Share of days labelled stress")
+    n_train: int
+    n_test: int
+    models: dict[str, dict] = Field(
+        description="Per model: out-of-sample ROC-AUC, time-series CV AUC, "
+        "precision/recall, confusion matrix, ROC curve")
+    feature_importance: dict[str, float] = Field(description="Random-forest importances")
+    logistic_coef: dict[str, float] = Field(description="Standardized logistic coefficients")
+
+
+class ClusterResponse(BaseModel):
+    pca: dict = Field(description="Explained-variance ratios, cumulative, per-name loadings")
+    kmeans: dict = Field(description="Best k, silhouette, per-ticker cluster labels")
+
+
 # ---------------------------------------------------------------- endpoints
 
 @app.get("/health")
@@ -270,6 +290,31 @@ def get_credit() -> CreditResponse:
             distance_to_default=json.loads(dtd.to_json(orient="index")))
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Credit model unavailable: {exc}")
+
+
+@app.get("/classify", response_model=ClassifyResponse)
+def get_classify() -> ClassifyResponse:
+    try:
+        from src.models.classify import train_stress_classifier
+        out = train_stress_classifier(_returns())
+        return ClassifyResponse(**out)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Classifier unavailable: {exc}")
+
+
+@app.get("/clusters", response_model=ClusterResponse)
+def get_clusters() -> ClusterResponse:
+    try:
+        from src.models.unsupervised import cluster_universe, pca_factors
+        r = _returns()
+        p = pca_factors(r)
+        return ClusterResponse(
+            pca={"explained_variance_ratio": p["explained_variance_ratio"],
+                 "cumulative_variance": p["cumulative_variance"],
+                 "loadings": json.loads(p["loadings"].to_json(orient="index"))},
+            kmeans=cluster_universe(r))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Clustering unavailable: {exc}")
 
 
 @app.post("/ask", response_model=AskResponse)
