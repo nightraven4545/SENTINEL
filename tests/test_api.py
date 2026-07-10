@@ -17,6 +17,7 @@ def synthetic_data(monkeypatch):
     api._tactical.cache_clear()
     api._forecast.cache_clear()
     api._diagnostics.cache_clear()
+    api._arima.cache_clear()
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
 
@@ -62,6 +63,15 @@ def test_diagnostics_endpoint(client):
     ac = body["autocorrelation"]
     assert len(ac["acf"]) == ac["nlags"] + 1
     assert "arch_effects" in ac["ljung_box_squared"]
+
+
+def test_arima_endpoint(client):
+    body = client.get("/arima").json()
+    assert {"vol_forecast", "returns_efficiency", "vs_garch"} <= set(body)
+    vf = body["vol_forecast"]
+    assert len(vf["forecast"]) == len(vf["lower"]) == len(vf["upper"])
+    assert all(f >= 0 for f in vf["forecast"])
+    assert "economically_flat" in body["returns_efficiency"]
 
 
 def test_stress_valid_scenario(client):

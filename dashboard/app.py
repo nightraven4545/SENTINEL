@@ -273,6 +273,16 @@ def load_decompose():
         return None
 
 
+@st.cache_data(show_spinner="Fitting ARIMA vol forecast…")
+def load_arima():
+    """ARIMA realized-vol forecast + the returns-efficiency finding. None on failure."""
+    try:
+        from src.models.arima import arima_summary
+        return arima_summary(returns)
+    except Exception:
+        return None
+
+
 @st.cache_data(show_spinner="Searching for analog days…")
 def load_analogs():
     """K nearest historical days to the latest one. None on failure."""
@@ -1310,3 +1320,33 @@ with tabs[11]:
             st.caption("Returns have no real seasonality, so we decompose realized "
                        "volatility instead: the STL trend is the slow drift in the risk "
                        "regime beneath the daily noise.")
+
+        ar = load_arima()
+        if ar:
+            vf = ar["vol_forecast"]
+            fdates = pd.bdate_range(returns.index[-1] + pd.Timedelta(days=1),
+                                    periods=vf["horizon"])
+            x = [returns.index[-1], *fdates]
+            fig = go.Figure()
+            fig.add_scatter(x=x, y=[vf["current_vol"], *vf["upper"]], line=dict(width=0),
+                            showlegend=False, hoverinfo="skip")
+            fig.add_scatter(x=x, y=[vf["current_vol"], *vf["lower"]], fill="tonexty",
+                            fillcolor="rgba(0,229,160,0.10)", line=dict(width=0),
+                            name=f"{int(vf['level'] * 100)}% interval")
+            fig.add_scatter(x=x, y=[vf["current_vol"], *vf["forecast"]],
+                            line=dict(color=MINT, width=2),
+                            name=f"ARIMA {tuple(vf['order'])}")
+            fig.add_scatter(x=[fdates[-1]], y=[ar["vs_garch"]["garch_end"]], mode="markers",
+                            marker=dict(color=AMBER, size=9, symbol="diamond"),
+                            name="GARCH 21d")
+            fig.update_layout(title="ARIMA realized-vol forecast vs GARCH — with prediction interval",
+                              yaxis_tickformat=".0%")
+            st.plotly_chart(themed(fig, 340), width="stretch")
+            eff = ar["returns_efficiency"]
+            flat = ("economically flat — an efficient-market result"
+                    if eff["economically_flat"] else "small but non-zero")
+            st.caption(
+                f"Two independent methods agree on 21-day vol: ARIMA {vf['forecast'][-1]:.1%} "
+                f"vs GARCH {ar['vs_garch']['garch_end']:.1%}. On **returns**, ARIMA's AIC-best "
+                f"order is {tuple(eff['best_order'])} and its 5-day forecast spans only "
+                f"{eff['forecast_spread_5d']:.2%} ({flat}).")

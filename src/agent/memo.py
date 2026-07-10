@@ -86,6 +86,7 @@ def gather_context() -> dict:
         "allocation": _allocation_context(r),
         "volatility_forecast": _forecast_context(r),
         "ts_diagnostics": _tsdiag_context(r),
+        "arima_crosscheck": _arima_context(r),
     }
 
 
@@ -229,6 +230,24 @@ def _tsdiag_context(r: pd.DataFrame) -> dict | None:
         return None
 
 
+def _arima_context(r: pd.DataFrame) -> dict | None:
+    """ARIMA's independent read on vol (a cross-check on the GARCH forecast) plus
+    the returns-are-unforecastable EMH finding."""
+    try:
+        from src.models.arima import forecast_vol_arima, returns_forecastability
+        vf = forecast_vol_arima(r)
+        eff = returns_forecastability(r)
+        return {
+            "arima_vol_21d": round(vf["forecast"][-1], 4),
+            "arima_order": vf["order"],
+            "returns_best_order": eff["best_order"],
+            "returns_economically_flat": eff["economically_flat"],
+            "returns_forecast_spread_5d": round(eff["forecast_spread_5d"], 5),
+        }
+    except Exception:
+        return None
+
+
 # ---------------------------------------------------------------- tools
 
 def _tool_risk_summary() -> str:
@@ -316,6 +335,11 @@ def _tool_forecast() -> str:
     return json.dumps(forecast_summary(_returns()), default=str)
 
 
+def _tool_arima() -> str:
+    from src.models.arima import arima_summary
+    return json.dumps(arima_summary(_returns()), default=str)
+
+
 TOOL_FUNCS = {
     "get_risk_summary": lambda inp: _tool_risk_summary(),
     "get_anomalies": lambda inp: _tool_anomalies(int(inp.get("limit", 20))),
@@ -330,6 +354,7 @@ TOOL_FUNCS = {
     "get_analog_days": lambda inp: _tool_analogs(),
     "get_tactical_backtest": lambda inp: _tool_tactical(),
     "get_volatility_forecast": lambda inp: _tool_forecast(),
+    "get_arima_forecast": lambda inp: _tool_arima(),
 }
 
 TOOLS = [
@@ -443,6 +468,15 @@ TOOLS = [
                        "95/99 forecast-VaR term structure, and a Kupiec backtest of GARCH "
                        "vs EWMA VaR calibration. Use for forward-looking (not just "
                        "current) volatility and tail-risk questions.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "get_arima_forecast",
+        "description": "ARIMA forecast of the 21-day realized-volatility series with "
+                       "prediction intervals (an independent statistical cross-check on "
+                       "the GARCH vol forecast), plus the returns-are-unforecastable EMH "
+                       "finding (ARIMA on daily returns is economically flat). Use to "
+                       "corroborate the vol outlook or to discuss return predictability.",
         "input_schema": {"type": "object", "properties": {}},
     },
 ]

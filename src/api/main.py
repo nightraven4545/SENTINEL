@@ -4,6 +4,7 @@ Endpoints:
   GET  /metrics       portfolio + per-ticker risk metrics
   GET  /forecast      GARCH(1,1) conditional-vol forecast + VaR term structure
   GET  /diagnostics   stationarity (ADF/KPSS), ACF/PACF, Ljung-Box ARCH-effect test
+  GET  /arima         ARIMA forecast of realized vol (+ the returns-are-flat EMH check)
   POST /stress        run a named stress scenario
   GET  /anomalies     detected anomalous days
   GET  /fundamentals  EDGAR financial-statement ratios + DuPont
@@ -239,6 +240,18 @@ class DiagnosticsResponse(BaseModel):
         "(white-noise test) and on squared returns (ARCH-effect test that warrants GARCH)")
 
 
+class ArimaResponse(BaseModel):
+    as_of: str
+    vol_forecast: dict = Field(
+        description="ARIMA forecast of the 21d realized-vol series with prediction "
+        "intervals, the AIC-selected order, and a residual white-noise check")
+    returns_efficiency: dict = Field(
+        description="EMH check: ARIMA on daily returns yields an economically flat "
+        "forecast (5-day drift under half a daily sigma) — no exploitable linear signal")
+    vs_garch: dict = Field(
+        description="ARIMA vs GARCH 21-day-ahead vol forecast — two independent methods")
+
+
 # ---------------------------------------------------------------- endpoints
 
 @app.get("/health")
@@ -282,6 +295,20 @@ def get_diagnostics() -> DiagnosticsResponse:
         return DiagnosticsResponse(**_diagnostics())
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Diagnostics unavailable: {exc}")
+
+
+@lru_cache(maxsize=1)
+def _arima() -> dict:
+    from src.models.arima import arima_summary
+    return arima_summary(_returns())
+
+
+@app.get("/arima", response_model=ArimaResponse)
+def get_arima() -> ArimaResponse:
+    try:
+        return ArimaResponse(**_arima())
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"ARIMA forecast unavailable: {exc}")
 
 
 @app.post("/stress", response_model=StressResponse)
