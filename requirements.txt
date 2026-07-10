@@ -16,6 +16,10 @@ duckdb            # local analytical warehouse
 scikit-learn      # IsolationForest anomaly baseline
 torch             # PyTorch autoencoder
 networkx          # correlation graph
+scipy             # optimisation (Merton/Markowitz) + Student-t quantiles for GARCH VaR
+arch              # GARCH(1,1) conditional-volatility forecasting (Student-t innovations)
+statsmodels       # stationarity (ADF/KPSS), ACF/PACF, Ljung-Box, ARIMA/SARIMAX
+# pmdarima        # OPTIONAL auto_arima — arima.py falls back to an AIC grid if absent
 
 # --- Serving ---
 fastapi

@@ -246,25 +246,21 @@ def risk_contributions(returns: pd.DataFrame,
 VAR_BACKTEST_WINDOW = 250
 
 
-def kupiec_test(returns: pd.Series, level: float = 0.95,
-                window: int = VAR_BACKTEST_WINDOW) -> dict[str, float]:
-    """Out-of-sample VaR backtest with Kupiec's proportion-of-failures test.
+def kupiec_lr(observations: int, breaches: int,
+              level: float = 0.95) -> dict[str, float]:
+    """Kupiec proportion-of-failures LR test from a raw breach count.
 
-    Each day's VaR is the empirical quantile of the TRAILING `window` days
-    only (shifted one day — no look-ahead), then we count realized breaches.
-    Kupiec's likelihood ratio asks: is the observed breach rate statistically
-    consistent with the promised one? LR ~ chi2(1); p < 0.05 rejects the model.
+    Factored out of kupiec_test so ANY VaR model — rolling-quantile, EWMA,
+    GARCH — can be scored on one identical yardstick: given `observations`
+    out-of-sample days and `breaches` (days the realized loss exceeded VaR),
+    is the breach rate statistically consistent with the promised 1-level?
+    LR ~ chi2(1); p < 0.05 rejects the model.
     """
-    r = returns.dropna()
-    var_series = r.rolling(window).quantile(1 - level).shift(1)
-    realized = r[var_series.notna()]
-    n = len(realized)
-    p = 1 - level
-    if n == 0:  # fewer than `window`+1 observations: no out-of-sample day to test
+    n, p = observations, 1 - level
+    if n == 0:  # nothing to test (too little history) — honest, not a crash
         return {"observations": 0, "breaches": 0, "expected_breaches": 0.0,
                 "breach_rate": float("nan"), "lr_stat": float("nan"),
                 "p_value": float("nan"), "passes": False}
-    breaches = int((realized < var_series[var_series.notna()]).sum())
     phat = breaches / n
     # log-likelihoods under promised rate p vs observed rate phat
     ll_null = (n - breaches) * np.log(1 - p) + breaches * np.log(p)
@@ -283,6 +279,24 @@ def kupiec_test(returns: pd.Series, level: float = 0.95,
         "p_value": round(p_value, 4),
         "passes": bool(p_value > 0.05),
     }
+
+
+def kupiec_test(returns: pd.Series, level: float = 0.95,
+                window: int = VAR_BACKTEST_WINDOW) -> dict[str, float]:
+    """Out-of-sample VaR backtest with Kupiec's proportion-of-failures test.
+
+    Each day's VaR is the empirical quantile of the TRAILING `window` days
+    only (shifted one day — no look-ahead), then we count realized breaches
+    and hand them to kupiec_lr for the likelihood-ratio verdict.
+    """
+    r = returns.dropna()
+    var_series = r.rolling(window).quantile(1 - level).shift(1)
+    realized = r[var_series.notna()]
+    n = len(realized)
+    if n == 0:  # fewer than `window`+1 observations: no out-of-sample day to test
+        return kupiec_lr(0, 0, level)
+    breaches = int((realized < var_series[var_series.notna()]).sum())
+    return kupiec_lr(n, breaches, level)
 
 
 def summary(returns: pd.DataFrame) -> pd.DataFrame:

@@ -84,6 +84,7 @@ def gather_context() -> dict:
         "forensic": _forensic_context(),
         "credit": _credit_context(r),
         "allocation": _allocation_context(r),
+        "volatility_forecast": _forecast_context(r),
     }
 
 
@@ -183,6 +184,30 @@ def _allocation_context(r: pd.DataFrame) -> dict | None:
         return None
 
 
+def _forecast_context(r: pd.DataFrame) -> dict | None:
+    """GARCH(1,1) forward volatility for the equal-weight portfolio — where vol
+    is heading vs where it sits today, and whether the GARCH VaR is better
+    calibrated than the EWMA read. The forecasting counterpart to the EWMA
+    'today's regime' clause."""
+    try:
+        from src.models.volatility import (fit_garch, forecast_var,
+                                           forecast_vol, garch_vs_ewma_backtest)
+        port = risk.portfolio_returns(r)
+        params, fc = fit_garch(port), forecast_vol(port)
+        return {
+            "current_vol": round(fc["current_vol"], 4),
+            "forecast_vol_21d": round(fc["vol_path"][-1], 4),
+            "long_run_vol": (round(params["long_run_vol"], 4)
+                             if params["long_run_vol"] is not None else None),
+            "persistence": round(params["persistence"], 4),
+            "var_95_term": {h: round(v, 4)
+                            for h, v in forecast_var(port, 0.95)["var"].items()},
+            "garch_vs_ewma_kupiec": garch_vs_ewma_backtest(port),
+        }
+    except Exception:
+        return None
+
+
 # ---------------------------------------------------------------- tools
 
 def _tool_risk_summary() -> str:
@@ -265,6 +290,11 @@ def _tool_tactical() -> str:
                        "test_days": out["test_days"], "gate": out["gate"]})
 
 
+def _tool_forecast() -> str:
+    from src.models.volatility import forecast_summary
+    return json.dumps(forecast_summary(_returns()), default=str)
+
+
 TOOL_FUNCS = {
     "get_risk_summary": lambda inp: _tool_risk_summary(),
     "get_anomalies": lambda inp: _tool_anomalies(int(inp.get("limit", 20))),
@@ -278,6 +308,7 @@ TOOL_FUNCS = {
     "get_distance_to_default": lambda inp: _tool_credit(),
     "get_analog_days": lambda inp: _tool_analogs(),
     "get_tactical_backtest": lambda inp: _tool_tactical(),
+    "get_volatility_forecast": lambda inp: _tool_forecast(),
 }
 
 TOOLS = [
@@ -383,6 +414,16 @@ TOOLS = [
                        "(the diversified 1/N book).",
         "input_schema": {"type": "object", "properties": {}},
     },
+    {
+        "name": "get_volatility_forecast",
+        "description": "GARCH(1,1) conditional-volatility FORECAST per ticker and the "
+                       "equal-weight portfolio: fitted persistence and long-run vol, the "
+                       "annualized volatility cone over the next ~21 trading days, the "
+                       "95/99 forecast-VaR term structure, and a Kupiec backtest of GARCH "
+                       "vs EWMA VaR calibration. Use for forward-looking (not just "
+                       "current) volatility and tail-risk questions.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
 ]
 
 
@@ -472,6 +513,14 @@ def _template_memo(ctx: dict) -> str:
         f"{port['var_95']:.2%} — the live read on whether risk is currently "
         f"elevated." if ewma_v is not None else "")
 
+    # the forward-looking counterpart to the EWMA nowcast: where GARCH sees vol going
+    fcast = ctx.get("volatility_forecast")
+    forecast_clause = (
+        f" GARCH(1,1) projects portfolio vol from {fcast['current_vol']:.1%} today "
+        f"toward {fcast['forecast_vol_21d']:.1%} over the next month (long-run "
+        f"{fcast['long_run_vol']:.1%}, persistence {fcast['persistence']:.2f})."
+        if fcast and fcast.get("long_run_vol") is not None else "")
+
     factor = ctx.get("factor_model")
     factor_line = (
         f"A Fama-French 5+momentum regression explains R²={factor['r2']:.0%} of "
@@ -528,7 +577,7 @@ historical drawdown {port['max_drawdown']:.1%}.
 ## 2. Market Risk & Factor Exposure
 Portfolio vol is below every single constituent — diversification is working.
 Systemic risk concentrates in the highest-centrality names in the correlation
-network; the tech cluster moves as one block.{ewma_clause} {factor_line}
+network; the tech cluster moves as one block.{ewma_clause}{forecast_clause} {factor_line}
 
 ## 3. Anomalies
 Both detectors (IsolationForest + autoencoder) currently agree on

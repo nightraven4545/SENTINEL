@@ -2,6 +2,7 @@
 
 Endpoints:
   GET  /metrics       portfolio + per-ticker risk metrics
+  GET  /forecast      GARCH(1,1) conditional-vol forecast + VaR term structure
   POST /stress        run a named stress scenario
   GET  /anomalies     detected anomalous days
   GET  /fundamentals  EDGAR financial-statement ratios + DuPont
@@ -214,6 +215,19 @@ class CandidatesResponse(BaseModel):
         "single detector (if any) fired")
 
 
+class ForecastResponse(BaseModel):
+    as_of: str
+    horizon: int = Field(description="Trading days ahead the vol cone projects")
+    var_horizons: list[int] = Field(description="Horizons (days) in the VaR term structure")
+    series: dict[str, dict] = Field(
+        description="Per ticker + equal-weight PORTFOLIO: GARCH(1,1) parameters "
+        "(persistence, long-run vol), the annualized conditional-vol cone, and the "
+        "95/99 forecast-VaR term structure (positive loss fractions)")
+    ewma_vs_garch: dict = Field(
+        description="Kupiec proportion-of-failures backtest comparing GARCH vs EWMA "
+        "one-day-ahead VaR calibration on the portfolio")
+
+
 # ---------------------------------------------------------------- endpoints
 
 @app.get("/health")
@@ -227,6 +241,22 @@ def get_metrics() -> MetricsResponse:
     table = risk.summary(r).round(6)
     return MetricsResponse(as_of=r.index.max().date(),
                            metrics=table.to_dict(orient="index"))
+
+
+@lru_cache(maxsize=1)
+def _forecast() -> dict:
+    # one GARCH fit per name + portfolio + the backtest fit; a few seconds cold,
+    # then cached for the process like the other heavy models.
+    from src.models.volatility import forecast_summary
+    return forecast_summary(_returns())
+
+
+@app.get("/forecast", response_model=ForecastResponse)
+def get_forecast() -> ForecastResponse:
+    try:
+        return ForecastResponse(**_forecast())
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Volatility forecast unavailable: {exc}")
 
 
 @app.post("/stress", response_model=StressResponse)

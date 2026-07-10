@@ -15,6 +15,7 @@ def synthetic_data(monkeypatch):
     monkeypatch.setattr(api, "_returns", lambda: df)
     api._anomalies.cache_clear()
     api._tactical.cache_clear()
+    api._forecast.cache_clear()
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
 
@@ -38,6 +39,19 @@ def test_metrics_includes_portfolio_row(client):
     assert row["var_95"] > 0 and row["max_drawdown"] <= 0
     assert row["es_95"] >= row["var_95"]  # tail mean is at least the threshold
     assert row["ewma_var_95"] > 0  # today's regime-aware VaR is a positive loss
+
+
+def test_forecast_endpoint(client):
+    body = client.get("/forecast").json()
+    assert body["horizon"] == 21
+    assert body["var_horizons"] == [1, 5, 10, 21]
+    assert "PORTFOLIO" in body["series"]
+    p = body["series"]["PORTFOLIO"]
+    assert len(p["vol_path"]) == 21
+    # forecast-VaR term structure: positive and monotone-increasing in horizon
+    vals = [p["var_95"][k] for k in sorted(p["var_95"], key=int)]
+    assert all(v > 0 for v in vals) and vals == sorted(vals)
+    assert {"garch", "ewma"} <= set(body["ewma_vs_garch"])
 
 
 def test_stress_valid_scenario(client):

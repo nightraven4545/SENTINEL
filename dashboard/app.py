@@ -243,6 +243,16 @@ def load_tactical():
         return None
 
 
+@st.cache_data(show_spinner="Fitting GARCH volatility forecast…")
+def load_forecast():
+    """GARCH(1,1) conditional-vol forecast + VaR term structure. None on failure."""
+    try:
+        from src.models.volatility import forecast_summary
+        return forecast_summary(returns)
+    except Exception:
+        return None
+
+
 @st.cache_data(show_spinner="Searching for analog days…")
 def load_analogs():
     """K nearest historical days to the latest one. None on failure."""
@@ -314,12 +324,30 @@ with tabs[0]:
                     line=dict(width=1.8, color=MINT))
     fig.add_hline(y=full_vol, line=dict(color=MUTED, dash="dot", width=1),
                   annotation_text="full-sample")
-    fig.update_layout(title="Portfolio volatility (annualized) — 21d rolling vs EWMA conditional",
-                      yaxis_tickformat=".0%")
+
+    # GARCH forward cone: where conditional vol is heading — the one thing EWMA
+    # (persistence forced to 1, so a flat forecast) structurally cannot show.
+    fc = load_forecast()
+    pf = fc["series"]["PORTFOLIO"] if fc else None
+    if pf and pf.get("long_run_vol"):
+        future = pd.bdate_range(ewma.index[-1] + pd.Timedelta(days=1),
+                                periods=len(pf["vol_path"]))
+        fig.add_scatter(x=[ewma.index[-1], *future],
+                        y=[pf["current_vol"], *pf["vol_path"]],
+                        name="GARCH forecast", line=dict(width=1.8, color=AMBER, dash="dot"))
+        fig.add_hline(y=pf["long_run_vol"], line=dict(color=AMBER, dash="dash", width=1),
+                      annotation_text="GARCH long-run")
+    fig.update_layout(
+        title="Portfolio volatility (annualized) — 21d rolling, EWMA conditional, GARCH forecast",
+        yaxis_tickformat=".0%")
     st.plotly_chart(themed(fig, 320), width="stretch")
+    cone_note = (f" GARCH(1,1) then projects it from {pf['current_vol']:.1%} toward its "
+                 f"{pf['long_run_vol']:.1%} long-run level over the next "
+                 f"{len(pf['vol_path'])} trading days (persistence {pf['params']['persistence']:.2f})."
+                 if pf and pf.get("long_run_vol") else "")
     st.caption("EWMA decays the weight on past shocks geometrically (RiskMetrics "
                f"λ={risk.EWMA_LAMBDA}), so it tracks the regime smoothly where the "
-               "equal-weighted rolling window steps and lags.")
+               "equal-weighted rolling window steps and lags." + cone_note)
 
 
 # ---------------------------------------------------------------- Deep Dive
@@ -377,6 +405,25 @@ with tabs[1]:
                    f"out-of-sample):** {bt['breaches']} breaches vs "
                    f"{bt['expected_breaches']} expected over {bt['observations']} days "
                    f"— model {verdict} (p = {bt['p_value']:.2f}).")
+
+        # forecast-VaR term structure: cumulative GARCH VaR over 1..21 days ahead —
+        # the forward complement to the point-in-time methodologies above.
+        fc = load_forecast()
+        pf = fc["series"]["PORTFOLIO"] if fc else None
+        if pf and pf.get("long_run_vol"):
+            hs = sorted(pf["var_95"])
+            fig = go.Figure()
+            fig.add_bar(x=[f"{h}d" for h in hs], y=[pf["var_95"][h] for h in hs],
+                        name="95%", marker_color=MINT)
+            fig.add_bar(x=[f"{h}d" for h in hs], y=[pf["var_99"][h] for h in hs],
+                        name="99%", marker_color=MUTED)
+            fig.update_layout(barmode="group", yaxis_tickformat=".1%",
+                              title="Forecast-VaR term structure (GARCH, cumulative)")
+            st.plotly_chart(themed(fig, 300), width="stretch")
+            g, e = fc["ewma_vs_garch"]["garch"], fc["ewma_vs_garch"]["ewma"]
+            st.caption(f"Cumulative VaR bends with the vol forecast, not a naive √t fan. "
+                       f"**Calibration (Kupiec, 1-day):** GARCH {g['breach_rate']:.1%} vs "
+                       f"EWMA {e['breach_rate']:.1%} breaches against a 5.0% nominal.")
 
     # -- Euler risk decomposition: weight vs actual share of risk
     with right:
