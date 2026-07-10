@@ -114,7 +114,7 @@ from src.models import risk  # noqa: E402  (after sys.path fix)
 port = risk.portfolio_returns(returns)
 tabs = st.tabs(["Overview", "Deep Dive", "Anomalies", "Network", "Stress Test",
                 "Fundamentals", "Forensic", "Factors", "Allocation", "ML Models",
-                "Tactical", "Ask the Agent"])
+                "Tactical", "Time-Series", "Ask the Agent"])
 
 
 @st.cache_data(show_spinner="Loading benchmark…")
@@ -249,6 +249,26 @@ def load_forecast():
     try:
         from src.models.volatility import forecast_summary
         return forecast_summary(returns)
+    except Exception:
+        return None
+
+
+@st.cache_data(show_spinner="Running time-series diagnostics…")
+def load_diagnostics():
+    """Stationarity + ACF/PACF + Ljung-Box on the portfolio. None on failure."""
+    try:
+        from src.models.tsdiag import tsdiag_summary
+        return tsdiag_summary(returns)
+    except Exception:
+        return None
+
+
+@st.cache_data(show_spinner="Decomposing realized vol…")
+def load_decompose():
+    """STL decomposition of the 21d realized-vol series. None on failure."""
+    try:
+        from src.models.tsdiag import decompose
+        return decompose(port)
     except Exception:
         return None
 
@@ -1184,7 +1204,7 @@ with tabs[10]:
 
 # ---------------------------------------------------------------- Ask the Agent
 
-with tabs[11]:
+with tabs[12]:
     from src.agent import memo as agent
 
     llm_ready = agent._client() is not None
@@ -1220,3 +1240,73 @@ with tabs[11]:
                                file_name="sentinel_risk_memo.pdf",
                                mime="application/pdf")
             st.markdown(memo_text)
+
+
+# ---------------------------------------------------------------- Time-Series
+
+with tabs[11]:
+    st.subheader("Time-series diagnostics")
+    st.caption("Every risk metric here assumes returns are stationary and iid. "
+               "This tab tests those assumptions instead of taking them on faith.")
+
+    diag = load_diagnostics()
+    if diag is None:
+        st.info("Diagnostics unavailable.")
+    else:
+        stn = diag["stationarity"]
+        rows = []
+        for label, key in [("Returns", "returns"), ("Log-price level", "level")]:
+            a, k = stn[key]["adf"], stn[key]["kpss"]
+            rows.append({
+                "series": label,
+                "ADF p": round(a["pvalue"], 4),
+                "ADF": "stationary" if a["stationary"] else "non-stationary",
+                "KPSS p": round(k["pvalue"], 4),
+                "KPSS": "stationary" if k["stationary"] else "non-stationary"})
+        st.dataframe(pd.DataFrame(rows).set_index("series"), width="stretch")
+        st.caption("Returns are stationary; the price level wanders — the reason every "
+                   "model here works on returns, not prices. ADF H₀ = unit root; "
+                   "KPSS H₀ = stationarity, so the two tests cross-check each other.")
+
+        ac = diag["autocorrelation"]
+        lags = list(range(ac["nlags"] + 1))
+        cL, cR = st.columns(2, gap="large")
+        for col, title, vals, ci in [
+                (cL, "ACF — returns", ac["acf"], ac["acf_confint"]),
+                (cR, "PACF — returns", ac["pacf"], ac["pacf_confint"])]:
+            with col:
+                # statsmodels returns the CI around each estimate; the ±band around
+                # zero (its half-width) is the 95% significance envelope.
+                band = [ci[i][1] - vals[i] for i in range(len(vals))]
+                fig = go.Figure()
+                fig.add_bar(x=lags, y=vals, marker_color=MINT, width=0.4)
+                fig.add_scatter(x=lags, y=band, line=dict(color=MUTED, dash="dot", width=1),
+                                name="95%")
+                fig.add_scatter(x=lags, y=[-b for b in band],
+                                line=dict(color=MUTED, dash="dot", width=1), showlegend=False)
+                fig.update_layout(title=title)
+                st.plotly_chart(themed(fig, 320), width="stretch")
+
+        lbr, lbs = ac["ljung_box_returns"], ac["ljung_box_squared"]
+        st.caption(
+            f"**Ljung-Box ({lbr['lags']} lags):** returns p = {lbr['pvalue']:.1e} "
+            f"({'white noise' if lbr['white_noise'] else 'some linear autocorrelation'}); "
+            f"**squared** returns p = {lbs['pvalue']:.1e} "
+            f"({'ARCH effects → GARCH warranted' if lbs['arch_effects'] else 'no ARCH effects'})."
+            " Autocorrelation in the *squared* series is volatility clustering — the "
+            "statistical basis for the GARCH forecast on the Overview tab.")
+
+        dec = load_decompose()
+        if dec:
+            idx = pd.to_datetime(dec["index"])
+            fig = go.Figure()
+            fig.add_scatter(x=idx, y=dec["observed"], name="realized vol (21d)",
+                            line=dict(color=MUTED, width=1))
+            fig.add_scatter(x=idx, y=dec["trend"], name="STL trend",
+                            line=dict(color=MINT, width=2))
+            fig.update_layout(title="STL decomposition — realized-volatility trend",
+                              yaxis_tickformat=".0%")
+            st.plotly_chart(themed(fig, 320), width="stretch")
+            st.caption("Returns have no real seasonality, so we decompose realized "
+                       "volatility instead: the STL trend is the slow drift in the risk "
+                       "regime beneath the daily noise.")

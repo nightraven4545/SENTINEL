@@ -16,6 +16,7 @@ def synthetic_data(monkeypatch):
     api._anomalies.cache_clear()
     api._tactical.cache_clear()
     api._forecast.cache_clear()
+    api._diagnostics.cache_clear()
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
 
@@ -52,6 +53,15 @@ def test_forecast_endpoint(client):
     vals = [p["var_95"][k] for k in sorted(p["var_95"], key=int)]
     assert all(v > 0 for v in vals) and vals == sorted(vals)
     assert {"garch", "ewma"} <= set(body["ewma_vs_garch"])
+
+
+def test_diagnostics_endpoint(client):
+    body = client.get("/diagnostics").json()
+    assert {"stationarity", "autocorrelation"} <= set(body)
+    assert body["stationarity"]["returns"]["adf"]["stationary"] is True
+    ac = body["autocorrelation"]
+    assert len(ac["acf"]) == ac["nlags"] + 1
+    assert "arch_effects" in ac["ljung_box_squared"]
 
 
 def test_stress_valid_scenario(client):

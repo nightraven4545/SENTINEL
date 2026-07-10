@@ -85,6 +85,7 @@ def gather_context() -> dict:
         "credit": _credit_context(r),
         "allocation": _allocation_context(r),
         "volatility_forecast": _forecast_context(r),
+        "ts_diagnostics": _tsdiag_context(r),
     }
 
 
@@ -203,6 +204,26 @@ def _forecast_context(r: pd.DataFrame) -> dict | None:
             "var_95_term": {h: round(v, 4)
                             for h, v in forecast_var(port, 0.95)["var"].items()},
             "garch_vs_ewma_kupiec": garch_vs_ewma_backtest(port),
+        }
+    except Exception:
+        return None
+
+
+def _tsdiag_context(r: pd.DataFrame) -> dict | None:
+    """Stationarity + autocorrelation verdicts — the assumption-checking layer.
+    The squared-return Ljung-Box result is the statistical justification for the
+    GARCH forecast above."""
+    try:
+        from src.models.tsdiag import autocorrelation, stationarity
+        port = risk.portfolio_returns(r)
+        st, ac = stationarity(port), autocorrelation(port)
+        return {
+            "returns_stationary": st["returns"]["adf"]["stationary"],
+            "adf_returns_p": round(st["returns"]["adf"]["pvalue"], 4),
+            "level_nonstationary": not st["level"]["adf"]["stationary"],
+            "returns_white_noise": ac["ljung_box_returns"]["white_noise"],
+            "arch_effects": ac["ljung_box_squared"]["arch_effects"],
+            "ljung_box_squared_p": ac["ljung_box_squared"]["pvalue"],
         }
     except Exception:
         return None
@@ -521,6 +542,20 @@ def _template_memo(ctx: dict) -> str:
         f"{fcast['long_run_vol']:.1%}, persistence {fcast['persistence']:.2f})."
         if fcast and fcast.get("long_run_vol") is not None else "")
 
+    # diagnostics that justify the modelling choices rather than assuming them
+    diag = ctx.get("ts_diagnostics")
+    if diag and diag.get("arch_effects"):
+        acorr = ("shows some linear autocorrelation" if not diag["returns_white_noise"]
+                 else "is serially uncorrelated")
+        diag_clause = (
+            f" Diagnostics back the modelling choices: returns are stationary "
+            f"(ADF p={diag['adf_returns_p']:.3f}) while the price level is not, and though "
+            f"the return series {acorr}, its squared returns are strongly autocorrelated "
+            f"(Ljung-Box p={diag['ljung_box_squared_p']:.1e}) — the ARCH effect that "
+            f"warrants the GARCH model.")
+    else:
+        diag_clause = ""
+
     factor = ctx.get("factor_model")
     factor_line = (
         f"A Fama-French 5+momentum regression explains R²={factor['r2']:.0%} of "
@@ -577,7 +612,7 @@ historical drawdown {port['max_drawdown']:.1%}.
 ## 2. Market Risk & Factor Exposure
 Portfolio vol is below every single constituent — diversification is working.
 Systemic risk concentrates in the highest-centrality names in the correlation
-network; the tech cluster moves as one block.{ewma_clause}{forecast_clause} {factor_line}
+network; the tech cluster moves as one block.{ewma_clause}{forecast_clause}{diag_clause} {factor_line}
 
 ## 3. Anomalies
 Both detectors (IsolationForest + autoencoder) currently agree on

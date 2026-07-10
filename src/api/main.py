@@ -3,6 +3,7 @@
 Endpoints:
   GET  /metrics       portfolio + per-ticker risk metrics
   GET  /forecast      GARCH(1,1) conditional-vol forecast + VaR term structure
+  GET  /diagnostics   stationarity (ADF/KPSS), ACF/PACF, Ljung-Box ARCH-effect test
   POST /stress        run a named stress scenario
   GET  /anomalies     detected anomalous days
   GET  /fundamentals  EDGAR financial-statement ratios + DuPont
@@ -228,6 +229,16 @@ class ForecastResponse(BaseModel):
         "one-day-ahead VaR calibration on the portfolio")
 
 
+class DiagnosticsResponse(BaseModel):
+    as_of: str
+    stationarity: dict = Field(
+        description="ADF (H0: unit root) + KPSS (H0: stationary) on portfolio "
+        "returns and on the log-price level — returns are stationary, the level is not")
+    autocorrelation: dict = Field(
+        description="ACF/PACF with confidence bands, plus Ljung-Box on returns "
+        "(white-noise test) and on squared returns (ARCH-effect test that warrants GARCH)")
+
+
 # ---------------------------------------------------------------- endpoints
 
 @app.get("/health")
@@ -257,6 +268,20 @@ def get_forecast() -> ForecastResponse:
         return ForecastResponse(**_forecast())
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Volatility forecast unavailable: {exc}")
+
+
+@lru_cache(maxsize=1)
+def _diagnostics() -> dict:
+    from src.models.tsdiag import tsdiag_summary
+    return tsdiag_summary(_returns())
+
+
+@app.get("/diagnostics", response_model=DiagnosticsResponse)
+def get_diagnostics() -> DiagnosticsResponse:
+    try:
+        return DiagnosticsResponse(**_diagnostics())
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Diagnostics unavailable: {exc}")
 
 
 @app.post("/stress", response_model=StressResponse)
